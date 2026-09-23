@@ -22,7 +22,7 @@ Mission War ; 1 ; daily ; War XP -> honor at the Morrison officer (5,000 WEXP = 
 CA2 runs ; 5 ; daily ; Fragment milestone only: 5 clean runs = 30 fragments. A single failed run loses the tier for the day, so re-buff first.
 CA3 runs ; 5 ; daily ; Fragment milestone only: 5 clean runs = 30 fragments. Fast runs, two-channel trick.
 CA4 runs ; 5 ; daily ; Fragment milestone only: 5 clean runs = 42 fragments, the best tier.
-CA5 runs ; 5 ; daily ; Fragment milestone only. Easy and semi-AFK from ~420k CP. Skip CA6/CA7, they are nerfed for fragments.
+CA5 runs ; 5 ; daily ; Fragment milestone only. Easy from ~420k CP. Skip CA6/CA7, they are nerfed for fragments.
 ";
         const string Wind =
 @"Wing dungeon ; 9 ; daily ; 3 free + 2 resets of 3. Kill the mysterious boy in 17-20 s for the secret chest (Potion of Alz 1M-100M). Gives myth XP too.

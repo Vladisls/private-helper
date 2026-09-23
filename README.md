@@ -2,10 +2,17 @@
 
 Small always-on-top helpers that float over Cabal (PlayCabal), for Windows 10/11:
 
-- **CA Runner**: timer for the two-channel Chaos Arena trick. Flashes the screen when the 2nd boss is up and you are AFK.
+- **CA Runner**: timer for the two-channel Chaos Arena trick. Flashes the screen when the 2nd boss is up and you are not looking.
 - **Daily To-do**: daily/weekly checklist with + / - counters, CP-bracket presets and a "why" tooltip per task.
 
 It never reads, hooks or sends anything to the game.
+
+## PlayCabal rules
+
+Checked against [playcabal.to/tos](https://playcabal.to/tos) (2026-09-23): the rules don't mention overlays or timers.
+They ban cheating, **macros for active grinding** and **AFK DP farming**. This helper sends no keys or clicks to the
+game and reads nothing from it, so it is not a macro. You still play every run yourself: stay at the PC during the
+CA wait. When in doubt, ask a GA on the PlayCabal Discord.
 
 ## Download (once)
 
@@ -54,9 +61,10 @@ CA RUNNER (two-channel Chaos Arena)
 1. Channel 2: open CA, break the gates.
 2. Change server to channel 3. When the game says you have 9 minutes to re-enter:
    click Start (or press Ctrl+F9). The panel shows "2nd CA boss spawns in 6:00".
-3. Open the 2nd CA and wait. AFK or alt-tab is fine.
+3. Open the 2nd CA and wait at the PC. Alt-tabbing is fine, walking away is not: PlayCabal's
+   rules ban staying AFK in a dungeon ("all characters must be actively engaged").
 4. At 6:00 (2nd CA clock 14:00) the boss is up: beep, the panel blinks red with the time left
-   to re-enter the 1st CA. If you are AFK (no input for 15 s) or another window is in front,
+   to re-enter the 1st CA. If you have not touched mouse/keyboard for 15 s or another window is in front,
    the whole screen flashes red and beeps until you are back in the game.
 5. Kill the boss, change server to channel 2, re-enter the 1st CA (press Exit, not Challenge),
    then click Reset (Ctrl+F10).
