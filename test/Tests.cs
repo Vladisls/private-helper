@@ -75,7 +75,7 @@ static class T {
     // ---- Catalog, CP filter, sorting ----
     var cpp = new List<string>(); var cat = Todo.ParseList(TodoPresets.Catalog, cpp);
     Check(cpp.Count==0 && cat.Count>=25 && cat.TrueForAll(i => i.Tip.Length > 10 && i.Value > 0), $"catalog: {cat.Count} tasks, all with value + tip {string.Join(" | ",cpp)}");
-    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v2" && !cat.Exists(i => i.Name.StartsWith("Buy dungeon entries")), "catalog header");
+    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v3" && !cat.Exists(i => i.Name.StartsWith("Buy dungeon entries") || i.Name.StartsWith("White Gold")), "catalog header");
     Check(Todo.TryParseCp("518k", out var c1) && c1==518000 && Todo.TryParseCp("1.1m", out var c2) && c2==1100000
           && Todo.TryParseCp("518,000", out var c3) && c3==518000 && !Todo.TryParseCp("abc", out _), "CP parses 518k / 1.1m / 518,000");
     Check(Todo.FormatCp(518000)=="518k" && Todo.FormatCp(1100000)=="1.1M" && Todo.FormatCp(1000000)=="1M", "CP formats");
@@ -91,7 +91,7 @@ static class T {
     var old = Todo.ParseList("CA1 runs ; 5 ; daily ; Only for the milestone", new List<string>())[0];
     Check(old.MinCp==0 && old.Tip=="Only for the milestone", "old 4-field lines still read the tip");
     Check(TodoPresets.IsOutdated("# preset: 500k-1M CP\nx;1") && !TodoPresets.IsOutdated(TodoPresets.Catalog) && !TodoPresets.IsOutdated("# preset: Custom\nx;1")
-          && TodoPresets.IsOutdated("# preset: Catalog v1\nx;1"), "old bracket lists are replaced, custom lists kept");
+          && TodoPresets.IsOutdated("# preset: Catalog v2\nx;1"), "old bracket lists are replaced, custom lists kept");
     // ---- Settings save ----
     var sv = Settings.Parse("", new List<string>()); sv.BossSpawnAfter = S(330); sv.Sound = false; sv.WeeklyResetDay = DayOfWeek.Friday; sv.DailyResetTime = new TimeSpan(6,30,0);
     var rp = new List<string>(); var back = Settings.Parse(sv.ToIni(), rp);

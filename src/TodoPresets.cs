@@ -7,7 +7,7 @@ namespace CAHelper
     /// Line format: name ; count ; daily|weekly ; min CP ; value ; why
     public static class TodoPresets
     {
-        public const int CatalogVersion = 2;
+        public const int CatalogVersion = 3;
         public static string CatalogName => "Catalog v" + CatalogVersion;
 
         public static readonly string Catalog =
@@ -22,7 +22,6 @@ Vote + Voter Sigil ; 1 ; daily ; 0 ; 990 ; Quick win, 1 min. Free daily rewards 
 Guild treasure claim ; 1 ; daily ; 0 ; 985 ; Quick win. Guild window > Guild Treasure > Receive all (guild main character must be set). Elixir material buys honor potions in the Guild Shop.
 GM buff ; 3 ; daily ; 0 ; 975 ; GM Blessing lv5, 3 per day. Pop it before hard runs: one failed CA run loses that tier's reward for the day.
 Chloe token quest ; 1 ; daily ; 0 ; 970 ; New Material Development Support at Chloe: craft from 3x Upgrade Core (Highest), hand in with the Remote NPC button. 15 tokens pay Tempus' Ring registration instead of 300M. Never buy tokens for DP.
-White Gold Fruits (Troglodyte) ; 1 ; daily ; 0 ; 960 ; Lv180+. Secret shop restocks daily. Trade fruits for honor potions; pay with stain clones to keep Force Gems for the pass.
 Mission War ; 1 ; daily ; 0 ; 900 ; War XP -> honor at the Morrison officer (5,000 WEXP = 45M honor). Merit tickets -> evaluate and report medals for more honor. Honor class 20 unlocks the Honor Medal.
 
 CA1 runs ; 5 ; daily ; 0 ; 505 ; Only for the fragment/DF milestone: 5 clean runs = 30 fragments. Go as fast as possible with the two-channel trick and CA Runner. On return press Exit, never Challenge. Delete the CA rows once your DF set is done.
