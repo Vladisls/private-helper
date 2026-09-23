@@ -58,22 +58,65 @@ namespace CAHelper
             return big;
         }
 
-        public static async Task<(PartyRead read, string raw)> ReadAsync(Rectangle area)
+        /// Keeps only white text and turns it into dark text on light: game world, red HP bars and
+        /// grey class icons fade out. Tuned on a real GDG screenshot (all 16 names read correctly).
+        static Bitmap Clean(Bitmap enlarged, double lo, double hi, double colorPenalty)
         {
-            byte[] png;
-            using (var shot = Capture(area))
-            using (var big = Enlarge(shot, 2))
-            using (var ms = new MemoryStream())
+            var bmp = new Bitmap(enlarged.Width, enlarged.Height, PixelFormat.Format32bppArgb);
+            var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            var sd = enlarged.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var dd = bmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            var buf = new byte[sd.Stride * bmp.Height];
+            Marshal.Copy(sd.Scan0, buf, 0, buf.Length);
+            for (int i = 0; i + 3 < buf.Length; i += 4)
             {
-                big.Save(ms, ImageFormat.Png);
-                png = ms.ToArray();
-                try { shot.Save(LastCapturePath, ImageFormat.Png); } catch { }   // for "Show last capture"
+                double b = buf[i], g = buf[i + 1], r = buf[i + 2];
+                double mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b));
+                double v = (mn - colorPenalty * (mx - mn) - lo) / (hi - lo);
+                v = v < 0 ? 0 : v > 1 ? 1 : v;
+                byte o = (byte)(255 - v * 255);
+                buf[i] = buf[i + 1] = buf[i + 2] = o; buf[i + 3] = 255;
             }
+            Marshal.Copy(buf, 0, dd.Scan0, buf.Length);
+            enlarged.UnlockBits(sd); bmp.UnlockBits(dd);
+            return bmp;
+        }
 
+        static byte[] Png(Bitmap b) { using (var ms = new MemoryStream()) { b.Save(ms, ImageFormat.Png); return ms.ToArray(); } }
+
+        /// Reads the area several ways (two cleanups + plain) and returns every read; the caller picks the best.
+        public static async Task<(List<PartyRead> reads, string raw)> ReadAllAsync(Rectangle area)
+        {
             var engine = CreateEngine();
             if (engine == null)
                 throw new InvalidOperationException("Windows has no text-recognition language installed. Settings > Time & language > Language: add English.");
 
+            var images = new List<(string name, byte[] png)>();
+            using (var shot = Capture(area))
+            {
+                try { shot.Save(LastCapturePath, ImageFormat.Png); } catch { }   // for "Open last capture image"
+                using (var x3 = Enlarge(shot, 3))
+                {
+                    using (var c1 = Clean(x3, 120, 240, 1.5)) images.Add(("clean", Png(c1)));
+                    using (var c2 = Clean(x3, 90, 230, 1.0)) images.Add(("clean-soft", Png(c2)));
+                }
+                using (var x2 = Enlarge(shot, 2)) images.Add(("plain", Png(x2)));
+            }
+
+            var reads = new List<PartyRead>();
+            var raw = new System.Text.StringBuilder();
+            foreach (var (name, png) in images)
+            {
+                var (read, text) = await ReadPngAsync(engine, png);
+                reads.Add(read);
+                raw.Append("[").Append(name).Append("] ").Append(string.Join(", ", read.Names))
+                   .Append(read.Count.HasValue ? $"  (window says {read.Count})" : "").Append("\n");
+            }
+            return (reads, raw.ToString());
+        }
+
+        static async Task<(PartyRead read, string text)> ReadPngAsync(Windows.Media.Ocr.OcrEngine engine, byte[] png)
+        {
             using (var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream())
             {
                 await ras.WriteAsync(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(png));
@@ -97,6 +140,7 @@ namespace CAHelper
                 }
             }
         }
+
 
         static Windows.Media.Ocr.OcrEngine CreateEngine()
         {

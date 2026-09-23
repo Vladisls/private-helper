@@ -60,7 +60,7 @@ namespace CAHelper
                     {
                         double gap = w.X - (prev.Value.X + prev.Value.W);
                         double h = Math.Max(1, (w.H + prev.Value.H) / 2);
-                        if (gap > h * 0.6) { Flush(token, read.Names); }
+                        if (gap > h * 1.1) { Flush(token, read.Names); }   // columns are far apart; split names are close
                     }
                     token.Append(w.Text);
                     prev = w;
@@ -70,20 +70,23 @@ namespace CAHelper
             return read;
         }
 
+        /// A single word that can't be part of a name: icon specks, HP numbers.
         static bool IsJunk(string t)
         {
-            var s = t.Trim();
-            if (s.Length <= 1) return true;                                   // icon read as "X"
-            if (s.Contains("/")) return true;                                 // 14795/14795
-            int digits = s.Count(char.IsDigit);
-            return digits * 2 > s.Length;                                     // mostly digits: HP pieces
+            var s = new string(t.Where(c => !char.IsWhiteSpace(c)).ToArray());
+            if (s.Count(char.IsLetterOrDigit) <= 1) return true;             // icon read as "X", "•", "%"
+            if (s.IndexOfAny(new[] { '/', '|', ';' }) >= 0 && s.Count(char.IsDigit) >= 3) return true;   // 14795/14795
+            return s.All(c => char.IsDigit(c) || c == ',' || c == '.');       // 1479514795
         }
+
+        /// A glued token that is still mostly digits is an HP number, not a name.
+        static bool MostlyDigits(string s) => s.Count(char.IsDigit) * 10 > s.Length * 6;
 
         static void Flush(StringBuilder token, List<string> names)
         {
             var clean = new string(token.ToString().Where(char.IsLetterOrDigit).ToArray());
             token.Clear();
-            if (clean.Length >= 2 && !IsJunk(clean) && !names.Contains(clean)) names.Add(clean);
+            if (clean.Length >= 2 && !MostlyDigits(clean) && !names.Contains(clean)) names.Add(clean);
         }
 
         /// Folds letters the reader confuses in this font: I/l/1/i, O/0, rn/m, vv/w, 5/S.
@@ -114,6 +117,20 @@ namespace CAHelper
                     d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
             return d[a.Length, b.Length];
         }
+
+        /// Best read for "Fix party": name count matching the window's member count wins, then more names.
+        public static PartyRead BestForFix(IList<PartyRead> reads) =>
+            reads.OrderByDescending(r => r.Count.HasValue && r.Count.Value == r.Names.Count ? 1 : 0)
+                 .ThenBy(r => r.Count.HasValue ? Math.Abs(r.Count.Value - r.Names.Count) : 0)
+                 .ThenByDescending(r => r.Names.Count).First();
+
+        /// Best read for "Validate": the one that agrees most with the roster (a misread must not look like a sniper).
+        public static PartyRead BestForValidate(IList<string> roster, IList<PartyRead> reads) =>
+            reads.Select(r => (r, c: Compare(roster, r)))
+                 .OrderByDescending(x => x.c.Seen.Count(s => s.kind == MatchKind.Exact) * 2 + x.c.Seen.Count(s => s.kind == MatchKind.Probable))
+                 .ThenBy(x => x.c.NewNames.Count())
+                 .ThenByDescending(x => x.r.Count.HasValue && x.r.Count.Value == x.r.Names.Count ? 1 : 0)
+                 .First().r;
 
         public static PartyResult Compare(IList<string> roster, PartyRead read)
         {

@@ -140,6 +140,20 @@ static class T {
     var pr = PartyCheck.Extract(lines);
     Check(string.Join(",", pr.Names)=="Regnitiel,Conzine,netrl,BirdTreeCircle,DynaxWI,CarTyTa,GooFy994" && pr.Count==19 && pr.Capacity==25,
           "names extracted, HP/icon dropped, split name glued, count 19/25 ("+string.Join(",", pr.Names)+")");
+    // Real Windows-reader failures from the first GDG test (2026-09-23)
+    var winLines = new List<IList<OcrWord>> {
+      new List<OcrWord>{ Wd("GOOF",30,140,34), Wd("y994",68,140,30) },            // "GooFy994" split, digits kept
+      new List<OcrWord>{ Wd("Re",30,20,18), Wd("nitiel",60,20,40) },              // gap ~0.85x text height
+      new List<OcrWord>{ Wd("•",5,60,6), Wd("Csiribi",30,60,50), Wd("%",200,60,8), Wd("Conzine",230,60,55) },
+      new List<OcrWord>{ Wd("11187;11191",40,76,80), Wd("229/11229",240,76,70) },
+    };
+    var wr = PartyCheck.Extract(winLines);
+    Check(string.Join(",", wr.Names)=="GOOFy994,Renitiel,Csiribi,Conzine", "split names re-joined, icon specks and HP dropped ("+string.Join(",", wr.Names)+")");
+    var fixA = new PartyRead{ Names = new List<string>{"A1","B2","C3"}, Count=4 };
+    var fixB = new PartyRead{ Names = new List<string>{"Aaa","Bbb","Ccc","Ddd"}, Count=4 };
+    var fixC = new PartyRead{ Names = new List<string>{"Aaa","Bbb","Ccc","Ddd","Junk"}, Count=4 };
+    Check(PartyCheck.BestForFix(new[]{fixA, fixC, fixB}) == fixB, "Fix picks the read whose name count matches the window");
+
     var roster = new List<string>{ "Regnitiel","Conzine","DynaxWI","Doern","GooFy994","Butcher1","Melantha","BirdTreeCircle","netrl","CarTyTa" };
     var now1 = new PartyRead{ Names = new List<string>{ "CarTyTa","Dynaxwl","Regnitiel","GooFy994","netrl","Conzine","BirdTreeCircle","Doern","Butcher1","Melantha" }, Count=10 };
     var r1 = PartyCheck.Compare(roster, now1);
@@ -154,6 +168,8 @@ static class T {
     var r4 = PartyCheck.Compare(roster, now4);
     Check(!r4.AllGood && r4.Hidden==3, "3 names hidden (count 10, read 7): not validated");
     Check(PartyCheck.Compare(new List<string>{"Doern"}, new PartyRead{ Names=new List<string>{"Doen"} }).NewNames.Count()==1, "short names need an exact match");
+    var badRead = new PartyRead{ Names = new List<string>{ "Re","nitiel","EConzine","VD","axW1","Doern","FGButherl","GOOF","rxBirdTreeCircle","Melantha" }, Count=10 };
+    Check(PartyCheck.BestForValidate(roster, new[]{ badRead, now1 }) == now1, "Validate picks the read that agrees with the roster");
 
     // ---- Updater ----
     string sha = new string('a', 64);

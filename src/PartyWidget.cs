@@ -16,10 +16,10 @@ namespace CAHelper
 
         static string RosterPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-party.txt");
 
-        readonly Label status = new Label { Dock = DockStyle.Top, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted };
+        readonly Label status = new Label { Dock = DockStyle.Top, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted, UseMnemonic = false };
         readonly Button fix = Theme.MakeButton("Fix party"), validate = Theme.MakeButton("Validate", primary: true);
         readonly FlowLayoutPanel result = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
-        readonly Label footer = new Label { Dock = DockStyle.Bottom, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted, Cursor = Cursors.Hand, Text = "Area & roster ▾", TextAlign = ContentAlignment.MiddleLeft };
+        readonly Label footer = new Label { Dock = DockStyle.Bottom, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted, Cursor = Cursors.Hand, Text = "Area & roster ▾", TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
         readonly ToolTip tips = new ToolTip { ShowAlways = true, AutoPopDelay = 20000 };
         List<string> roster = new List<string>();
         Rectangle? area; DateTime? fixedAt; string lastRaw = "";
@@ -113,10 +113,11 @@ namespace CAHelper
             ClearResult(); Say("Reading…", Theme.Muted);
             try
             {
-                var (read, raw) = await PartyOcr.ReadAsync(area.Value);
+                var (reads, raw) = await PartyOcr.ReadAllAsync(area.Value);
                 lastRaw = raw;
                 ClearResult();
-                if (fixRoster) ShowFixed(read); else ShowValidation(read);
+                if (fixRoster || roster.Count == 0) ShowFixed(PartyCheck.BestForFix(reads));
+                else ShowValidation(PartyCheck.BestForValidate(roster, reads));
             }
             catch (Exception ex) { ClearResult(); Say("Could not read: " + ex.Message, Theme.Bad); }
             finally { busy = false; fix.Enabled = validate.Enabled = true; }
@@ -137,7 +138,6 @@ namespace CAHelper
 
         void ShowValidation(PartyRead read)
         {
-            if (roster.Count == 0) { Say("Fix the party first.", Theme.Bad); return; }
             var r = PartyCheck.Compare(roster, read);
             if (r.AllGood)
             {
@@ -159,7 +159,7 @@ namespace CAHelper
         {
             result.Controls.Add(new Label
             {
-                Text = text, ForeColor = color, AutoSize = true, MaximumSize = new Size(result.ClientSize.Width - 20, 0),
+                Text = text, ForeColor = color, AutoSize = true, UseMnemonic = false, MaximumSize = new Size(result.ClientSize.Width - 20, 0),
                 Font = color == Theme.Bad || color == Theme.Good ? Theme.Title : Theme.Normal, Margin = new Padding(0, 2, 0, 2)
             });
         }
