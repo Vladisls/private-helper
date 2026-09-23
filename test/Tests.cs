@@ -96,6 +96,36 @@ static class T {
     var sv = Settings.Parse("", new List<string>()); sv.BossSpawnAfter = S(330); sv.Sound = false; sv.WeeklyResetDay = DayOfWeek.Friday; sv.DailyResetTime = new TimeSpan(6,30,0);
     var rp = new List<string>(); var back = Settings.Parse(sv.ToIni(), rp);
     Check(rp.Count==0 && back.BossSpawnAfter==S(330) && !back.Sound && back.WeeklyResetDay==DayOfWeek.Friday && back.DailyResetTime==new TimeSpan(6,30,0), "settings save and load round-trip");
+    // ---- Alarms ----
+    var ap = new List<string>(); var al = Alarms.Parse(Alarms.DefaultList, ap);
+    Check(ap.Count==0 && al.Count==1 && al[0].Title=="GDG" && al[0].Time==new TimeSpan(19,30,0) && al[0].EveryDay && al[0].WarnMinutes==5, "default alarm: GDG 19:30 daily, warn 5");
+    var gdg = al[0]; var wed = new DateTime(2026,9,23);   // a Wednesday
+    Check(gdg.Next(wed.AddHours(12))==wed.AddHours(19.5) && gdg.Next(wed.AddHours(20))==wed.AddDays(1).AddHours(19.5), "next GDG: today before 19:30, tomorrow after");
+    var fri = Alarms.Parse("Weak EoD ; 20:00 ; Fri,Sat,Sun ; 10 ; on", new List<string>())[0];
+    Check(fri.Next(wed.AddHours(21))==wed.AddDays(2).AddHours(20) && fri.DaysText()=="Fri,Sat,Sun", "Fri-Sun alarm skips to Friday");
+    Check(Alarms.ToServer(new TimeSpan(19,30,0), TimeSpan.FromHours(-1))==new TimeSpan(18,30,0)
+          && Alarms.FromServer(new TimeSpan(18,30,0), TimeSpan.FromHours(-1))==new TimeSpan(19,30,0)
+          && Alarms.ToServer(new TimeSpan(0,30,0), TimeSpan.FromHours(-1))==new TimeSpan(23,30,0), "PC 19:30 = server 18:30, wraps past midnight");
+    var eng = new AlarmEngine(); var evs = new List<string>();
+    foreach (var t in new[]{ "19:20","19:25:00","19:25:30","19:29:59","19:30:00","19:30:40","19:31:05" }) {
+      var tt = TimeSpan.Parse(t.Length==5 ? t+":00" : t);
+      foreach (var e in eng.Tick(al, wed + tt)) evs.Add(t+" "+e.ev);
+    }
+    Check(string.Join(", ", evs)=="19:25:00 Warn, 19:30:00 Ring", "warns once at 19:25, rings once at 19:30 ("+string.Join(", ", evs)+")");
+    var eng2 = new AlarmEngine();
+    Check(eng2.Tick(al, wed + new TimeSpan(19,31,10)).Count==0, "restart after 19:31 does not replay the alarm");
+    Check(AlarmEngine.InWarning(gdg, wed + new TimeSpan(19,27,0)) && !AlarmEngine.InWarning(gdg, wed + new TimeSpan(19,20,0)), "row blinks only inside the warning window");
+    var off = Alarms.Parse("X ; 07:00 ; weekdays ; 0 ; off", new List<string>())[0];
+    Check(!off.Enabled && off.WarnMinutes==0 && off.DaysText()=="Mon-Fri" && new AlarmEngine().Tick(new[]{off}, wed.AddHours(7)).Count==0, "disabled alarm never rings");
+    var badA = new List<string>(); Alarms.Parse("A ; 25:00\nB ; 9:00 ; someday\nC ; 9:00 ; daily ; 999", badA);
+    Check(badA.Count==3, "bad time, days and warn are reported ("+string.Join(" | ",badA)+")");
+    var round = Alarms.Parse(Alarms.Serialize(new[]{ gdg, fri, off }), new List<string>());
+    Check(round.Count==3 && round[1].Title=="Weak EoD" && round[1].Days[5] && !round[1].Days[1] && !round[2].Enabled, "alarms save and load");
+    Check(Settings.TryParseOffset("-1:00", out var o1) && o1==TimeSpan.FromHours(-1) && Settings.TryParseOffset("+2", out var o2) && o2==TimeSpan.FromHours(2)
+          && !Settings.TryParseOffset("abc", out _) && Settings.FormatOffset(TimeSpan.FromHours(-1))=="-1:00", "server offset parses -1:00 / +2");
+    var so = Settings.Parse("", new List<string>()); so.ServerTimeOffset = TimeSpan.FromMinutes(90);
+    Check(Settings.Parse(so.ToIni(), new List<string>()).ServerTimeOffset==TimeSpan.FromMinutes(90) && Settings.Parse("", new List<string>()).ServerTimeOffset==TimeSpan.FromHours(-1), "offset saved; default -1:00");
+
     // ---- Updater ----
     string sha = new string('a', 64);
     Check(Updater.TryParseInfo("2.1.0\r\n"+sha+"\r\n", out var v1, out var h1) && v1==new Version(2,1,0) && h1==sha, "version.txt parses (CRLF ok)");

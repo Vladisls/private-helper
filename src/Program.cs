@@ -55,6 +55,7 @@ namespace CAHelper
         {
             ("CARunner", "CA Runner", "Two-channel Chaos Arena timer", () => new CaRunnerWidget()),
             ("Todo", "Daily To-do", "Daily and weekly checklist with counters", () => new TodoWidget()),
+            ("Alarms", "Alarms", "Your own alarms with a warning before, e.g. GDG at 19:30", () => new AlarmsWidget()),
         };
     }
 
@@ -73,6 +74,9 @@ namespace CAHelper
         HelperWidget lastTouched;
         ToolStripMenuItem launcherItem;
         DateTime testFlashUntil = DateTime.MinValue;
+        readonly AlarmEngine alarmEngine = new AlarmEngine();
+        DateTime alarmFlashUntil = DateTime.MinValue; string alarmFlashTitle = "", alarmFlashSub = "";
+        int alarmBeepsLeft; DateTime nextAlarmBeep = DateTime.MinValue;
         bool blinkOn; int blinkCounter;
 
         public HelperContext()
@@ -97,6 +101,7 @@ namespace CAHelper
             foreach (var h in HelperCatalog.All)
                 if (layout.TryGetValue(h.Key + ".Open", out var open) && open == "1") OpenHelper(h.Key);
 
+            AlarmStore.Load();
             flash.Show(); flash.Hide();   // create the handle once so later shows never steal focus
             tick.Tick += (s, e) => OnTick();
             tick.Start();
@@ -256,11 +261,32 @@ namespace CAHelper
             }
             if (launcher.Visible) launcher.KeepOnTop();
 
-            bool testing = now < testFlashUntil;
-            if (flashFrom != null || testing)
+            // Alarms run here, so they ring even when the Alarms panel is closed.
+            AlarmStore.CheckFile(now);
+            foreach (var (a, ev, at) in alarmEngine.Tick(AlarmStore.All, now))
             {
-                flash.Text1 = flashFrom != null ? flashFrom.FlashTitle(flashState) : "TEST";
-                flash.Sub = flashFrom != null ? flashFrom.FlashSub(flashState) : "This is how the alert looks over the game";
+                var server = Alarms.ToServer(a.Time, settings.ServerTimeOffset);
+                if (ev == AlarmEvent.Warn)
+                {
+                    tray.ShowBalloonTip(8000, $"{a.Title} in {a.WarnMinutes} min", $"At {a.Time:hh\\:mm} (server {server:hh\\:mm})", ToolTipIcon.Info);
+                    if (settings.Sound) SystemSounds.Asterisk.Play();
+                }
+                else
+                {
+                    alarmFlashUntil = now.AddSeconds(8); alarmFlashTitle = a.Title.ToUpperInvariant() + " NOW";
+                    alarmFlashSub = $"{a.Time:hh\\:mm} · server {server:hh\\:mm}";
+                    tray.ShowBalloonTip(8000, a.Title + " now", alarmFlashSub, ToolTipIcon.Warning);
+                    if (settings.Sound) { alarmBeepsLeft = 3; nextAlarmBeep = now; }
+                }
+            }
+            if (alarmBeepsLeft > 0 && now >= nextAlarmBeep) { SystemSounds.Exclamation.Play(); alarmBeepsLeft--; nextAlarmBeep = now.AddSeconds(1.5); }
+
+            bool testing = now < testFlashUntil;
+            bool alarmFlash = now < alarmFlashUntil;
+            if (flashFrom != null || testing || alarmFlash)
+            {
+                flash.Text1 = flashFrom != null ? flashFrom.FlashTitle(flashState) : alarmFlash ? alarmFlashTitle : "TEST";
+                flash.Sub = flashFrom != null ? flashFrom.FlashSub(flashState) : alarmFlash ? alarmFlashSub : "This is how the alert looks over the game";
                 flash.Opacity = blinkOn ? 0.45 : 0.12;
                 flash.ShowQuiet(); flash.KeepOnTop(); flash.Invalidate();
             }

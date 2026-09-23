@@ -3,7 +3,8 @@
 Small always-on-top helpers that float over Cabal (PlayCabal), for Windows 10/11:
 
 - **CA Runner**: timer for the two-channel Chaos Arena trick. Flashes the screen when the 2nd boss is up and you are not looking.
-- **Daily To-do**: daily/weekly checklist with + / - counters, CP-bracket presets and a "why" tooltip per task.
+- **Daily To-do**: daily/weekly checklist with + / - counters, filtered by your CP, most valuable first, with a "why" tooltip per task.
+- **Alarms**: your own alarms (title + time + days), with a warning before. E.g. GDG every day at 19:30.
 
 It never reads, hooks or sends anything to the game.
 
@@ -89,6 +90,18 @@ DAILY TO-DO
 - The built-in list updates with the helper. To keep your own edits, change the first
   line of the list file to "# preset: Custom".
 - Daily tasks reset at the daily reset time, weekly ones on the weekly reset day (Settings).
+
+ALARMS
+- "+ Add alarm": title, time, days, how many minutes before to warn.
+  Type the time in your PC's time or in server time; the dialog shows both.
+- Starts with GDG at 19:30 (server 18:30), every day, warning 5 minutes before.
+- Warning: beep, tray message and the row blinks red. At the time: beeps and a short
+  click-through red flash over the game.
+- Alarms ring even when the Alarms panel is closed, as long as the helper runs.
+- Click an alarm to edit, switch off or delete it.
+- Server time offset (Settings): server clock minus your PC clock. Default -1:00, because the
+  server shows 18:30 when an Estonian PC shows 19:30. Check it again when clocks change for
+  summer/winter time if the server doesn't follow the same change.
 
 SETTINGS WINDOW (tray > Settings, or the "+" menu)
 Your CP, CA Runner timings, flash and sound options, hotkeys, to-do reset times, auto-update.

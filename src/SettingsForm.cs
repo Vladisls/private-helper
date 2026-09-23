@@ -10,7 +10,7 @@ namespace CAHelper
     sealed class SettingsForm : Form
     {
         readonly TextBox cp = Box(), reentry = Box(), boss = Box(), final = Box(), idle = Box(),
-                         gameMatch = Box(), startKey = Box(), resetKey = Box(), dailyReset = Box();
+                         gameMatch = Box(), startKey = Box(), resetKey = Box(), dailyReset = Box(), serverOffset = Box();
         readonly CheckBox sound = Check("Alert sound"), notFocused = Check("Flash when another window is in front of the game"),
                           whileActive = Check("Flash even while I'm playing"), autoUpdate = Check("Update from GitHub when the helper starts");
         readonly ComboBox weeklyDay = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
@@ -31,6 +31,7 @@ namespace CAHelper
             sound.Checked = s.Sound; notFocused.Checked = s.FlashWhenGameNotFocused; whileActive.Checked = s.FlashWhenActive; autoUpdate.Checked = s.AutoUpdate;
             gameMatch.Text = s.GameMatch; startKey.Text = s.RestartHotkey; resetKey.Text = s.StopHotkey;
             dailyReset.Text = s.DailyResetTime.ToString(@"hh\:mm"); weeklyDay.SelectedItem = s.WeeklyResetDay;
+            serverOffset.Text = Settings.FormatOffset(s.ServerTimeOffset);
 
             var grid = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Top };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -60,6 +61,8 @@ namespace CAHelper
             Section("Daily To-do");
             Row("Daily reset", dailyReset, "hh:mm, your PC's clock");
             Row("Weekly reset", weeklyDay);
+            Section("Alarms");
+            Row("Server time offset", serverOffset, "server minus your PC, e.g. -1:00 (server 18:30 = PC 19:30)");
             Section("Updates");
             Full(autoUpdate);
 
@@ -97,7 +100,8 @@ namespace CAHelper
                 .Replace("BossSpawnAfter=" + Fmt(draft.BossSpawnAfter), "BossSpawnAfter=" + boss.Text.Trim())
                 .Replace("FinalWarning=" + Fmt(draft.FinalWarning), "FinalWarning=" + final.Text.Trim())
                 .Replace("IdleAfter=" + Fmt(draft.IdleAfter), "IdleAfter=" + idle.Text.Trim())
-                .Replace("DailyResetTime=" + draft.DailyResetTime.ToString(@"hh\:mm"), "DailyResetTime=" + dailyReset.Text.Trim());
+                .Replace("DailyResetTime=" + draft.DailyResetTime.ToString(@"hh\:mm"), "DailyResetTime=" + dailyReset.Text.Trim())
+                .Replace("ServerTimeOffset=" + Settings.FormatOffset(draft.ServerTimeOffset), "ServerTimeOffset=" + serverOffset.Text.Trim());
             var parsed = Settings.Parse(ini, problems);
             if (problems.Count > 0) { error.Text = string.Join("\n", problems); return; }
 

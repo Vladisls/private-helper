@@ -16,6 +16,7 @@ namespace CAHelper
         public TimeSpan DailyResetTime = TimeSpan.Zero;
         public DayOfWeek WeeklyResetDay = DayOfWeek.Tuesday;
         public bool AutoUpdate = true;
+        public TimeSpan ServerTimeOffset = TimeSpan.FromHours(-1);   // server clock = PC clock + this
         public string UpdateUrl = "";
         public bool FlashWhenActive = false;
         public bool Sound = true;
@@ -58,9 +59,30 @@ StopHotkey=Ctrl+F10
 DailyResetTime=00:00
 WeeklyResetDay=Tuesday
 
+; Alarms: server clock minus your PC clock, e.g. -1:00 when the server shows 18:30 while your PC shows 19:30
+ServerTimeOffset=-1:00
+
 ; Update from GitHub (Vladisls/private-helper, main branch) every time the helper starts
 AutoUpdate=true
 ";
+
+        /// "-1:00", "+2:30", "0", "-1"
+        public static bool TryParseOffset(string v, out TimeSpan off)
+        {
+            off = TimeSpan.Zero;
+            var t = (v ?? "").Trim().Replace(" ", "");
+            if (t.Length == 0) return false;
+            int sign = 1;
+            if (t[0] == '-' || t[0] == '+') { if (t[0] == '-') sign = -1; t = t.Substring(1); }
+            var p = t.Split(':');
+            if (!int.TryParse(p[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int h) || h > 14) return false;
+            int m = 0;
+            if (p.Length == 2 && (!int.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out m) || m < 0 || m >= 60)) return false;
+            if (p.Length > 2) return false;
+            off = TimeSpan.FromMinutes(sign * (h * 60 + m));
+            return true;
+        }
+        public static string FormatOffset(TimeSpan o) => (o < TimeSpan.Zero ? "-" : "+") + $"{(int)Math.Abs(o.TotalHours)}:{Math.Abs(o.Minutes):00}";
 
         static string T(TimeSpan t) => $"{(int)t.TotalMinutes}:{t.Seconds:00}";
         static string B(bool b) => b ? "true" : "false";
@@ -74,7 +96,7 @@ AutoUpdate=true
                 ["IdleAfter"] = T(IdleAfter), ["FlashWhenGameNotFocused"] = B(FlashWhenGameNotFocused), ["GameMatch"] = GameMatch,
                 ["FlashWhenActive"] = B(FlashWhenActive), ["Sound"] = B(Sound), ["RestartHotkey"] = RestartHotkey, ["StopHotkey"] = StopHotkey,
                 ["DailyResetTime"] = DailyResetTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture), ["WeeklyResetDay"] = WeeklyResetDay.ToString(),
-                ["AutoUpdate"] = B(AutoUpdate),
+                ["AutoUpdate"] = B(AutoUpdate), ["ServerTimeOffset"] = FormatOffset(ServerTimeOffset),
             };
             var sb = new System.Text.StringBuilder();
             foreach (var raw in DefaultIni.Replace("\r", "").Split('\n'))
@@ -119,6 +141,10 @@ AutoUpdate=true
                     case "flashwhengamenotfocused": Bool(v, ref s.FlashWhenGameNotFocused, k, problems); break;
                     case "gamematch": s.GameMatch = v; break;
                     case "autoupdate": Bool(v, ref s.AutoUpdate, k, problems); break;
+                    case "servertimeoffset":
+                        if (TryParseOffset(v, out var off)) s.ServerTimeOffset = off;
+                        else problems.Add($"{k}: '{v}' should look like -1:00, +2:00 or 0");
+                        break;
                     case "updateurl": s.UpdateUrl = v; break;
                     case "dailyresettime":
                         if (TimeSpan.TryParseExact(v, new[] { @"h\:mm", @"hh\:mm" }, CultureInfo.InvariantCulture, out var rt) && rt < TimeSpan.FromDays(1)) s.DailyResetTime = rt;
