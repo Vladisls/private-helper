@@ -65,9 +65,13 @@ namespace CAHelper
             }
         }
 
-        public static void Restart()
+        /// Starts a new copy after an update. The new copy waits for this one to exit.
+        public static void Restart() => Launch("--updated");
+
+        /// Plain restart from the menu: the new copy waits for this one, then starts normally (including the update check).
+        public static void Launch(string arg)
         {
-            Process.Start(new ProcessStartInfo(ExePath, "--updated") { UseShellExecute = false, WorkingDirectory = Dir });
+            Process.Start(new ProcessStartInfo(ExePath, arg) { UseShellExecute = false, WorkingDirectory = Dir });
         }
 
         public static bool TryParseInfo(string text, out Version version, out string sha)

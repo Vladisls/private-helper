@@ -18,10 +18,11 @@ namespace CAHelper
         static void Main(string[] args)
         {
             bool justUpdated = Array.IndexOf(args, "--updated") >= 0;
+            bool restarted = Array.IndexOf(args, "--restart") >= 0;
             using (var mutex = new Mutex(true, "CabalHelper_SingleInstance", out bool first))
             {
                 // After an update the old process may still be closing: wait for it instead of refusing.
-                if (!first && !(justUpdated && WaitFor(mutex)))
+                if (!first && !((justUpdated || restarted) && WaitFor(mutex)))
                 { MessageBox.Show("Cabal Helper is already running. Look for it in the tray.", "Cabal Helper"); return; }
 
                 Updater.CleanupOld();
@@ -121,6 +122,7 @@ namespace CAHelper
             m.Items.Add("Check for updates", null, (s, e) => CheckForUpdatesNow());
             m.Items.Add(new ToolStripLabel("Cabal Helper v" + Updater.Short(Updater.Current)) { ForeColor = Color.Gray });
             m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("Restart", null, (s, e) => RestartHelper());
             m.Items.Add("Exit", null, (s, e) => ExitThread());
             return m;
         }
@@ -138,7 +140,20 @@ namespace CAHelper
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Settings…", null, (s, e) => OpenSettings());
             m.Items.Add("Hide \"+\" button (tray icon brings it back)", null, (s, e) => SetLauncherVisible(false));
+            m.Items.Add("Restart helper", null, (s, e) => RestartHelper());
             return m;
+        }
+
+        /// Closes this copy and starts a fresh one (which also checks GitHub for an update).
+        void RestartHelper()
+        {
+            if (widgets.OfType<CaRunnerWidget>().Any(w => w.Running) &&
+                MessageBox.Show("A CA Runner countdown is running and will be lost. Restart anyway?", "Cabal Helper",
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            try { Updater.Launch("--restart"); }
+            catch (Exception ex) { MessageBox.Show("Could not restart: " + ex.Message, "Cabal Helper"); return; }
+            ExitThread();
         }
 
         SettingsForm settingsForm;

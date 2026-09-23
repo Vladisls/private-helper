@@ -96,7 +96,7 @@ Saved to cabal-helper.ini next to the exe.
 
 TRAY ICON (right-click)
 Open helper, Show "+" button, Test flash, Settings, Edit settings file, Reload settings,
-Check for updates, Exit.
+Check for updates, Restart (fresh start, also checks for updates), Exit.
 
 SETTINGS FILE (cabal-helper.ini: the Settings window writes it; hand edits need tray > Reload settings)
 - ReentryWindow   1st CA re-entry time shown when you change channel. Default 9:00
