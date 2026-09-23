@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 
 namespace CAHelper
 {
     public sealed class TodoItem
     {
         public string Name; public int Target; public bool Weekly; public int Count; public string Tip = "";
+        public long MinCp; public int Value;
         public bool Done => Count >= Target;
         public string Key => (Weekly ? "W|" : "D|") + Name.Trim().ToLowerInvariant();
     }
@@ -17,9 +19,55 @@ namespace CAHelper
     {
         public static string ListPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-todo.txt");
         public static string BackupPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-todo.backup.txt");
+        public static string ProfilePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-profile.txt");
+
+        /// Your CP as last entered in the panel; -1 when never set.
+        public static long LoadCp()
+        {
+            try
+            {
+                if (File.Exists(ProfilePath))
+                    foreach (var l in File.ReadAllLines(ProfilePath))
+                        if (l.StartsWith("CP=") && long.TryParse(l.Substring(3), out long v)) return v;
+            }
+            catch { }
+            return -1;
+        }
+        public static void SaveCp(long cp) { try { File.WriteAllText(ProfilePath, "CP=" + cp + "\n"); } catch { } }
+
         public static string ProgressPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-progress.txt");
 
-        public static string DefaultList => TodoPresets.Default;
+        public static string DefaultList => TodoPresets.Catalog;
+
+        /// Accepts 518000, 518,000, 518k, 1.1m, 0 (empty = not a number).
+        public static bool TryParseCp(string text, out long cp)
+        {
+            cp = 0;
+            var t = (text ?? "").Trim().ToLowerInvariant().Replace(",", "").Replace(" ", "").Replace("_", "");
+            if (t.Length == 0) return false;
+            double mult = 1;
+            if (t.EndsWith("k")) { mult = 1e3; t = t.Substring(0, t.Length - 1); }
+            else if (t.EndsWith("m")) { mult = 1e6; t = t.Substring(0, t.Length - 1); }
+            if (!double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out double d) || d < 0 || d * mult > 1e9) return false;
+            cp = (long)Math.Round(d * mult);
+            return true;
+        }
+
+        public static string FormatCp(long cp) =>
+            cp >= 1_000_000 ? (cp / 1e6).ToString(cp % 1_000_000 == 0 ? "0" : "0.0#", CultureInfo.InvariantCulture) + "M"
+          : cp >= 1000 ? (cp / 1000).ToString(CultureInfo.InvariantCulture) + "k" : cp.ToString(CultureInfo.InvariantCulture);
+
+        /// Open tasks you can do at `cp`, most valuable first (list order breaks ties). cp < 0 = CP not set, show all.
+        public static List<TodoItem> Available(List<TodoItem> items, long cp, bool weekly) =>
+            items.Select((it, i) => (it, i))
+                 .Where(x => !x.it.Done && x.it.Weekly == weekly && (cp < 0 || x.it.MinCp <= cp))
+                 .OrderByDescending(x => x.it.Value).ThenBy(x => x.i)
+                 .Select(x => x.it).ToList();
+
+        /// Not done yet and above your CP, lowest requirement first.
+        public static List<TodoItem> Locked(List<TodoItem> items, long cp) =>
+            cp < 0 ? new List<TodoItem>() :
+            items.Where(it => !it.Done && it.MinCp > cp).OrderBy(it => it.MinCp).ThenByDescending(it => it.Value).ToList();
 
         public static List<TodoItem> ParseList(string text, List<string> problems)
         {
@@ -47,7 +95,14 @@ namespace CAHelper
                     else if (period.Length > 0 && period != "daily" && period != "day" && period != "d")
                         problems.Add($"Line {lineNo}: '{p[2].Trim()}' should be daily or weekly");
                 }
-                if (p.Length > 3) item.Tip = string.Join(";", p, 3, p.Length - 3).Trim();
+                // New format: ; min CP ; value ; tip.  Old format: ; tip
+                int next = 3;
+                if (p.Length > 3 && TryParseCp(p[3], out long minCp))
+                {
+                    item.MinCp = minCp; next = 4;
+                    if (p.Length > 4 && int.TryParse(p[4].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int val)) { item.Value = val; next = 5; }
+                }
+                if (p.Length > next) item.Tip = string.Join(";", p, next, p.Length - next).Trim();
                 if (!seen.Add(item.Key)) { problems.Add($"Line {lineNo}: '{item.Name}' is listed twice"); continue; }
                 list.Add(item);
             }

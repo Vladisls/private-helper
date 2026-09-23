@@ -72,18 +72,30 @@ static class T {
     var a3 = Todo.ParseList("CA1 runs ; 2", new List<string>());
     Todo.ApplyProgress(a3, saved, "2026-09-23", "W2026-09-22");
     Check(a3[0].Count==2 && a3[0].Done, "lowering a target clamps the count and marks it done");
-    // ---- Presets ----
-    foreach (var pr in TodoPresets.All) {
-      var pp = new List<string>(); var li = Todo.ParseList(pr.Text, pp);
-      bool allTips = li.TrueForAll(i => i.Tip.Length > 10);
-      Check(pp.Count==0 && li.Count>=12 && allTips && TodoPresets.NameOf(pr.Text)==pr.Name,
-            $"preset {pr.Name}: {li.Count} tasks, all with tips, no problems {string.Join(" | ",pp)}");
-    }
-    Check(TodoPresets.NameOf("CA1 ; 5")=="Custom" && TodoPresets.NameOf(Todo.DefaultList)=="500k-1M CP", "preset name detection, default is 500k-1M");
-    var tipItem = Todo.ParseList("X ; 2 ; daily ; why; with a semicolon", new List<string>())[0];
-    Check(tipItem.Tip=="why; with a semicolon", "tip keeps semicolons");
-    var ca = Todo.ParseList(TodoPresets.All[1].Text, new List<string>()).Find(i => i.Name=="CA1 runs");
-    Check(ca!=null && ca.Target==5 && ca.Tip.Contains("fragment"), "CA1 row: 5 runs, tip explains fragment/DF milestone");
+    // ---- Catalog, CP filter, sorting ----
+    var cpp = new List<string>(); var cat = Todo.ParseList(TodoPresets.Catalog, cpp);
+    Check(cpp.Count==0 && cat.Count>=25 && cat.TrueForAll(i => i.Tip.Length > 10 && i.Value > 0), $"catalog: {cat.Count} tasks, all with value + tip {string.Join(" | ",cpp)}");
+    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v1", "catalog header");
+    Check(Todo.TryParseCp("518k", out var c1) && c1==518000 && Todo.TryParseCp("1.1m", out var c2) && c2==1100000
+          && Todo.TryParseCp("518,000", out var c3) && c3==518000 && !Todo.TryParseCp("abc", out _), "CP parses 518k / 1.1m / 518,000");
+    Check(Todo.FormatCp(518000)=="518k" && Todo.FormatCp(1100000)=="1.1M" && Todo.FormatCp(1000000)=="1M", "CP formats");
+    var at518 = Todo.Available(cat, 518000, weekly:false);
+    Check(!at518.Exists(i => i.Name.StartsWith("Awakened IC") || i.Name.StartsWith("EOP") || i.Name.StartsWith("Frozen")), "518k: no 550k+ dungeons in the list");
+    Check(at518[0].Name.StartsWith("Vote") && at518.FindIndex(i=>i.Name=="CA1 runs") < at518.FindIndex(i=>i.Name=="Altar of Sienna B1F")
+          && at518.FindIndex(i=>i.Name=="Altar of Sienna B1F") < at518.FindIndex(i=>i.Name=="Hazardous Valley"), "518k: quick dailies, then CA, then farms by value");
+    var locked518 = Todo.Locked(cat, 518000);
+    Check(locked518.Count>0 && locked518[0].MinCp==550000 && locked518[locked518.Count-1].MinCp==1100000, "locked list: 550k first, Frozen Canyon 1.1M last");
+    var at600 = Todo.Available(cat, 600000, weekly:false);
+    Check(at600.FindIndex(i=>i.Name.StartsWith("EOP")) >= 0 && at600.FindIndex(i=>i.Name.StartsWith("EOP")) < at600.FindIndex(i=>i.Name=="Hazardous Valley"), "600k: EOP unlocked, ranked above Hazardous Valley");
+    Check(Todo.Available(cat, -1, false).Count == cat.FindAll(i=>!i.Weekly).Count, "CP not set: show everything");
+    var old = Todo.ParseList("CA1 runs ; 5 ; daily ; Only for the milestone", new List<string>())[0];
+    Check(old.MinCp==0 && old.Tip=="Only for the milestone", "old 4-field lines still read the tip");
+    Check(TodoPresets.IsOutdated("# preset: 500k-1M CP\nx;1") && !TodoPresets.IsOutdated(TodoPresets.Catalog) && !TodoPresets.IsOutdated("# preset: Custom\nx;1")
+          && TodoPresets.IsOutdated("# preset: Catalog v0\nx;1"), "old bracket lists are replaced, custom lists kept");
+    // ---- Settings save ----
+    var sv = Settings.Parse("", new List<string>()); sv.BossSpawnAfter = S(330); sv.Sound = false; sv.WeeklyResetDay = DayOfWeek.Friday; sv.DailyResetTime = new TimeSpan(6,30,0);
+    var rp = new List<string>(); var back = Settings.Parse(sv.ToIni(), rp);
+    Check(rp.Count==0 && back.BossSpawnAfter==S(330) && !back.Sound && back.WeeklyResetDay==DayOfWeek.Friday && back.DailyResetTime==new TimeSpan(6,30,0), "settings save and load round-trip");
     // ---- Updater ----
     string sha = new string('a', 64);
     Check(Updater.TryParseInfo("2.1.0\r\n"+sha+"\r\n", out var v1, out var h1) && v1==new Version(2,1,0) && h1==sha, "version.txt parses (CRLF ok)");

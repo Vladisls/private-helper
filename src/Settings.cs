@@ -62,6 +62,33 @@ WeeklyResetDay=Tuesday
 AutoUpdate=true
 ";
 
+        static string T(TimeSpan t) => $"{(int)t.TotalMinutes}:{t.Seconds:00}";
+        static string B(bool b) => b ? "true" : "false";
+
+        /// The settings as ini text (same layout and comments as the default file).
+        public string ToIni()
+        {
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ReentryWindow"] = T(ReentryWindow), ["BossSpawnAfter"] = T(BossSpawnAfter), ["FinalWarning"] = T(FinalWarning),
+                ["IdleAfter"] = T(IdleAfter), ["FlashWhenGameNotFocused"] = B(FlashWhenGameNotFocused), ["GameMatch"] = GameMatch,
+                ["FlashWhenActive"] = B(FlashWhenActive), ["Sound"] = B(Sound), ["RestartHotkey"] = RestartHotkey, ["StopHotkey"] = StopHotkey,
+                ["DailyResetTime"] = DailyResetTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture), ["WeeklyResetDay"] = WeeklyResetDay.ToString(),
+                ["AutoUpdate"] = B(AutoUpdate),
+            };
+            var sb = new System.Text.StringBuilder();
+            foreach (var raw in DefaultIni.Replace("\r", "").Split('\n'))
+            {
+                int eq = raw.IndexOf('=');
+                string key = eq > 0 && !raw.StartsWith(";") ? raw.Substring(0, eq) : null;
+                sb.Append(key != null && values.TryGetValue(key, out var v) ? key + "=" + v : raw).Append("\r\n");
+            }
+            if (!string.IsNullOrWhiteSpace(UpdateUrl)) sb.Append("UpdateUrl=").Append(UpdateUrl).Append("\r\n");
+            return sb.ToString().TrimEnd() + "\r\n";
+        }
+
+        public void Save() => File.WriteAllText(IniPath, ToIni());
+
         public static Settings Load(out List<string> problems)
         {
             problems = new List<string>();

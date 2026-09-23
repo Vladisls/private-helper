@@ -72,24 +72,33 @@ CA RUNNER (two-channel Chaos Arena)
 Next pair of instances: Start again.
 
 DAILY TO-DO
-- Starts with the 500k-1M CP list. Click "List" at the bottom of the panel to load another
-  CP bracket: 0-200k, 200k-500k, 500k-1M, 1M+. Your previous list is saved to
-  cabal-helper-todo.backup.txt first, and counts carry over for tasks with the same name.
-- Hover a task (the ones marked with the info sign) to see WHY you do it, e.g. CA runs are only
-  for the 5-run fragment milestone, so do them as fast as possible.
+- Set your CP once (click "Your CP" at the top of the panel, or tray > Settings).
+  The panel then shows only tasks you can do at that CP, most valuable first:
+  quick dailies, then Chaos Arena (while you still need fragments), then farms by
+  alz per hour (DP counted at 250k alz each).
+- Tasks that need more CP fold into "Needs more CP", with the CP each one needs,
+  so you can see what unlocks next. Update your CP as it grows.
+- Hover a task to see why you do it, the CP it needs and its value.
 - Click + or - on a row. Right-click a task name to set it straight to done (or back to 0).
 - Finished rows move into "Done (n)" at the bottom; click it to fold/unfold.
 - "List > Edit list in Notepad" to change tasks. One task per line:
-      name ; how many ; daily or weekly ; why (optional tooltip)
-      CA1 runs ; 5 ; daily ; Only for the fragment milestone, go fast
-  Save and the panel updates by itself.
-- Daily tasks reset at DailyResetTime, weekly ones on WeeklyResetDay (settings file).
-  Default: 00:00 your PC's time, weekly on Tuesday.
+      name ; how many ; daily or weekly ; min CP ; value ; why
+      Awakened IC1 ; 30 ; daily ; 550k ; 214 ; 7 DP per run
+  Save and the panel updates by itself. Some minimum CPs are estimates (marked "est."
+  in the tooltip): fix them in the list when the game tells you otherwise.
+- The built-in list updates with the helper. To keep your own edits, change the first
+  line of the list file to "# preset: Custom".
+- Daily tasks reset at the daily reset time, weekly ones on the weekly reset day (Settings).
+
+SETTINGS WINDOW (tray > Settings, or the "+" menu)
+Your CP, CA Runner timings, flash and sound options, hotkeys, to-do reset times, auto-update.
+Saved to cabal-helper.ini next to the exe.
 
 TRAY ICON (right-click)
-Open helper, Show "+" button, Test flash, Edit settings, Reload settings, Exit.
+Open helper, Show "+" button, Test flash, Settings, Edit settings file, Reload settings,
+Check for updates, Exit.
 
-SETTINGS (cabal-helper.ini, then tray > Reload settings)
+SETTINGS FILE (cabal-helper.ini: the Settings window writes it; hand edits need tray > Reload settings)
 - ReentryWindow   1st CA re-entry time shown when you change channel. Default 9:00
 - BossSpawnAfter  Start -> 2nd CA boss spawn. Default 6:00. Adjust after one run if you
                   press Start a bit before/after the gate break.

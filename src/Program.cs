@@ -111,7 +111,8 @@ namespace CAHelper
             m.Items.Add(launcherItem);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Test flash (5 seconds)", null, (s, e) => testFlashUntil = DateTime.Now.AddSeconds(5));
-            m.Items.Add("Edit settings", null, (s, e) =>
+            m.Items.Add("Settings…", null, (s, e) => OpenSettings());
+            m.Items.Add("Edit settings file", null, (s, e) =>
             {
                 try { System.Diagnostics.Process.Start("notepad.exe", "\"" + Settings.IniPath + "\""); }
                 catch (Exception ex) { MessageBox.Show(ex.Message, "Cabal Helper"); }
@@ -135,8 +136,18 @@ namespace CAHelper
                 m.Items.Add(new ToolStripMenuItem(h.Name + (open ? "  (open)" : ""), null, (s, e) => OpenHelper(key)) { ToolTipText = h.Description });
             }
             m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("Settings…", null, (s, e) => OpenSettings());
             m.Items.Add("Hide \"+\" button (tray icon brings it back)", null, (s, e) => SetLauncherVisible(false));
             return m;
+        }
+
+        SettingsForm settingsForm;
+        void OpenSettings()
+        {
+            if (settingsForm != null && !settingsForm.IsDisposed) { settingsForm.Activate(); return; }
+            settingsForm = new SettingsForm(settings, Todo.LoadCp());
+            settingsForm.Saved += () => { ApplySettings(showSummary: false); foreach (var w in widgets) w.OnSettingsChanged(); };
+            settingsForm.Show();
         }
 
         void CheckForUpdatesNow()

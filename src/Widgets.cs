@@ -166,6 +166,7 @@ namespace CAHelper
         /// Called ~5x per second. Return what the widget wants from the global flash/beep.
         public abstract AlertState Tick(DateTime now, TimeSpan idle, bool gameFocused, Settings s, bool blinkOn);
         public virtual bool SupportsHotkeys => true;
+        public virtual void OnSettingsChanged() { }
         public virtual void HotkeyStart() { }
         public virtual void HotkeyReset() { }
         public virtual string FlashTitle(AlertState st) => "";
