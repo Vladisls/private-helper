@@ -56,6 +56,7 @@ namespace CAHelper
             ("CARunner", "CA Runner", "Two-channel Chaos Arena timer", () => new CaRunnerWidget()),
             ("Todo", "Daily To-do", "Daily and weekly checklist with counters", () => new TodoWidget()),
             ("Alarms", "Alarms", "Your own alarms with a warning before, e.g. GDG at 19:30", () => new AlarmsWidget()),
+            ("Party", "Party Check", "Read party names from the screen: fix the party, validate after re-forms", () => new PartyWidget()),
         };
     }
 

@@ -5,6 +5,7 @@ Small always-on-top helpers that float over Cabal (PlayCabal), for Windows 10/11
 - **CA Runner**: timer for the two-channel Chaos Arena trick. Flashes the screen when the 2nd boss is up and you are not looking.
 - **Daily To-do**: daily/weekly checklist with + / - counters, filtered by your CP, most valuable first, with a "why" tooltip per task.
 - **Alarms**: your own alarms (title + time + days), with a warning before. E.g. GDG every day at 19:30.
+- **Party Check**: reads the party member names from the screen. Fix the party once, press Validate after each re-form to spot snipers.
 
 It never reads, hooks or sends anything to the game.
 
@@ -102,6 +103,23 @@ ALARMS
 - Server time offset (Settings): server clock minus your PC clock. Default -1:00, because the
   server shows 18:30 when an Estonian PC shows 19:30. Check it again when clocks change for
   summer/winter time if the server doesn't follow the same change.
+
+PARTY CHECK (GDG party re-forms)
+- Area & roster > Set area: drag a box around the member list, including the
+  "member (19/25)" line. Done once; the list stays in the same place.
+- Make every name visible. If the chat box covers the bottom of the list, make it smaller.
+- Fix party: while the party is right. The names are read and saved as the roster.
+- Validate: after each re-form. Shows "All 16 are the fixed party", or NEW: <name> (a
+  sniper) and Missing: <name>. The order of names doesn't matter.
+- If the window says more members than were read, it warns you instead of saying OK.
+- Look-alike letters (I/l, O/0) count as the same name. Close misreads are listed as
+  "close matches" instead of alarms.
+- Misread a name? Area & roster > Edit roster, one name per line.
+- "Show what was read last time" and "Open last capture image" show exactly what the
+  reader saw. Only the last capture is kept, in cabal-helper-party-last.png next to the exe.
+- Reading uses Windows' built-in text recognition: offline, free, nothing is sent anywhere.
+  It needs the English language (Settings > Time & language > Language).
+- It only reads on your click. It never kicks, invites or presses anything in the game.
 
 SETTINGS WINDOW (tray > Settings, or the "+" menu)
 Your CP, CA Runner timings, flash and sound options, hotkeys, to-do reset times, auto-update.

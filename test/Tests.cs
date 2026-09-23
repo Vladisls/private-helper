@@ -1,4 +1,4 @@
-using System; using System.Collections.Generic; using CAHelper;
+using System; using System.Collections.Generic; using System.Linq; using CAHelper;
 static class T {
   static int fail = 0;
   static void Check(bool ok, string name){ Console.WriteLine((ok?"PASS ":"FAIL ")+name); if(!ok) fail++; }
@@ -125,6 +125,35 @@ static class T {
           && !Settings.TryParseOffset("abc", out _) && Settings.FormatOffset(TimeSpan.FromHours(-1))=="-1:00", "server offset parses -1:00 / +2");
     var so = Settings.Parse("", new List<string>()); so.ServerTimeOffset = TimeSpan.FromMinutes(90);
     Check(Settings.Parse(so.ToIni(), new List<string>()).ServerTimeOffset==TimeSpan.FromMinutes(90) && Settings.Parse("", new List<string>()).ServerTimeOffset==TimeSpan.FromHours(-1), "offset saved; default -1:00");
+
+    // ---- Party check (names from the 2026-09-23 GDG screenshot) ----
+    OcrWord Wd(string t, double x, double y, double w=60, double h=14) => new OcrWord(t, x, y, w, h);
+    var lines = new List<IList<OcrWord>> {
+      new List<OcrWord>{ Wd("Flame",10,0,40), Wd("Dimension",55,0,70), Wd("/",130,0,5), Wd("member",140,0,50), Wd("(19/25)",195,0,40) },
+      new List<OcrWord>{ Wd("Regnitiel",30,20), Wd("Conzine",230,20) },           // two columns on one line
+      new List<OcrWord>{ Wd("14795/14795",40,36), Wd("14581/14581",240,36) },     // HP
+      new List<OcrWord>{ Wd("X",5,60,8), Wd("netrl",30,60,35) },                  // class icon read as X
+      new List<OcrWord>{ Wd("Bir",230,80,20), Wd("dTreeCircle",253,80,80) },       // one name split in two
+      new List<OcrWord>{ Wd("DynaxWI",30,100) }, new List<OcrWord>{ Wd("CarTyTa",30,120) }, new List<OcrWord>{ Wd("GooFy994",30,140) },
+      new List<OcrWord>{ Wd("5499/5543",40,156), Wd("1479514795",240,156) },
+    };
+    var pr = PartyCheck.Extract(lines);
+    Check(string.Join(",", pr.Names)=="Regnitiel,Conzine,netrl,BirdTreeCircle,DynaxWI,CarTyTa,GooFy994" && pr.Count==19 && pr.Capacity==25,
+          "names extracted, HP/icon dropped, split name glued, count 19/25 ("+string.Join(",", pr.Names)+")");
+    var roster = new List<string>{ "Regnitiel","Conzine","DynaxWI","Doern","GooFy994","Butcher1","Melantha","BirdTreeCircle","netrl","CarTyTa" };
+    var now1 = new PartyRead{ Names = new List<string>{ "CarTyTa","Dynaxwl","Regnitiel","GooFy994","netrl","Conzine","BirdTreeCircle","Doern","Butcher1","Melantha" }, Count=10 };
+    var r1 = PartyCheck.Compare(roster, now1);
+    Check(r1.AllGood && r1.Probable.Count()==0, "reshuffled party with I/l mixed up: all good");
+    var now2 = new PartyRead{ Names = new List<string>{ "CarTyTa","DynaxWI","Regnitiel","GooFy994","netrl","Conzine","BirdTreeCirc1e","Doern","Butcher1","XyzSniper" }, Count=10 };
+    var r2 = PartyCheck.Compare(roster, now2);
+    Check(!r2.AllGood && r2.NewNames.SequenceEqual(new[]{"XyzSniper"}) && r2.Missing.SequenceEqual(new[]{"Melantha"}), "sniper found, Melantha missing");
+    var now3 = new PartyRead{ Names = new List<string>{ "CarTyTa","DynaxWI","Regnitiel","GooFy994","netrl","Conzine","BirdTreeCirde","Doern","Butcher1","Melantha" }, Count=10 };
+    var r3 = PartyCheck.Compare(roster, now3);
+    Check(r3.AllGood && r3.Probable.Count()==1 && r3.Probable.First().roster=="BirdTreeCircle", "misread 'BirdTreeCirde' counts as probable BirdTreeCircle");
+    var now4 = new PartyRead{ Names = roster.Take(7).ToList(), Count=10 };
+    var r4 = PartyCheck.Compare(roster, now4);
+    Check(!r4.AllGood && r4.Hidden==3, "3 names hidden (count 10, read 7): not validated");
+    Check(PartyCheck.Compare(new List<string>{"Doern"}, new PartyRead{ Names=new List<string>{"Doen"} }).NewNames.Count()==1, "short names need an exact match");
 
     // ---- Updater ----
     string sha = new string('a', 64);
