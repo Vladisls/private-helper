@@ -7,7 +7,7 @@ namespace CAHelper
     /// Line format: name ; count ; daily|weekly ; min CP ; value ; why
     public static class TodoPresets
     {
-        public const int CatalogVersion = 5;
+        public const int CatalogVersion = 6;
         public static string CatalogName => "Catalog v" + CatalogVersion;
 
         public static readonly string Catalog =
@@ -23,6 +23,7 @@ Vote + Voter Sigil ; 1 ; action ; 0 ; 990 ; Free daily rewards and CP buff. Vote
 Guild treasure claim ; 1 ; action ; 0 ; 985 ; Guild window > Guild Treasure > Receive all (guild main character must be set). Elixir material buys honor potions in the Guild Shop.
 Daily cash shop (GM buff) ; 3 ; action ; 0 ; 975 ; GM Blessing lv5 from the daily cash shop, 3 per day. Pop it before hard runs: one failed CA run loses that tier's reward for the day.
 Chloe token quest ; 1 ; action ; 0 ; 970 ; New Material Development Support at Chloe: craft from 3x Upgrade Core (Highest), hand in with the Remote NPC button. 15 tokens pay Tempus' Ring registration instead of 300M. Never buy tokens for DP.
+Daily dungeons (next to minimap) ; 3 ; action ; 0 ; 965 ; The 3 dungeons that change every day, opened from the button next to the minimap.
 Mission War ; 1 ; daily ; 0 ; 900 ; War XP -> honor at the Morrison officer (5,000 WEXP = 45M honor). Merit tickets -> evaluate and report medals for more honor. Honor class 20 unlocks the Honor Medal.
 
 CA1 runs ; 5 ; daily ; 0 ; 505 ; Only for the fragment/DF milestone: 5 clean runs = 30 fragments. Go as fast as possible with the two-channel trick and CA Runner. On return press Exit, never Challenge. Delete the CA rows once your DF set is done.
@@ -31,16 +32,20 @@ CA3 runs ; 5 ; daily ; 300k ; 503 ; Fragment milestone only: 5 clean runs = 30 f
 CA4 runs ; 5 ; daily ; 350k ; 502 ; Fragment milestone only: 5 clean runs = 42 fragments, the best tier. Min CP est.
 CA5 runs ; 5 ; daily ; 400k ; 501 ; Fragment milestone only. Easy from ~420k CP. Skip CA6/CA7, they are nerfed for fragments.
 
-Frozen Canyon (UDX) ; 30 ; daily ; 1.1m ; 250 ; First thing every day at 1.1M+: ~160M/h + 8 DP per run, plus 1-2 Faded Violet Jewels (60-80M) per ~30 runs. Minimum 800-850k, comfortable at 1.1-1.2M.
-Altar of Sienna B1F ; 30 ; daily ; 200k ; 238 ; ~193M + 180 DP per hour. Low-CP friendly: 'if you're lower CP, this dungeon all day, every day'.
-Steamer Crazy ; 30 ; daily ; 141k ; 228 ; Best alz per minute: ~200M/h. Do 10 Normal + 20 Hard, skip the 10 Easy. Fills the CA 6-minute waits.
+Frozen Canyon (UDX) ; 30 ; daily ; 900k ; 250 ; First thing every day at 1.1M+: ~160M/h + 8 DP per run, plus 1-2 Faded Violet Jewels (60-80M) per ~30 runs. Menu requirement 900k CP, comfortable at 1.1-1.2M.
+Altar of Sienna B1F ; 30 ; daily ; 200k ; 180 ; B tier (Chunky): after the S and A tier dungeons, 'if you still want to grind some more'. Slower than the others; 6 DP per run, secret room chest drops Prettiest Bracelets (extract and sell the pieces, ~0.8M each).
+Altar of Sienna B2F ; 30 ; daily ; 400k ; 175 ; B tier (Chunky): 'quite valuable as well', same tier as B1F. Separate entries, so it doesn't use up B1F runs. Time 5 runs and note DP + drops to rate it properly. Min CP est.
+Steamer Crazy ; 40 ; daily ; 141k ; 260 ; S tier (Chunky, Sep 2026): one of the 'very first dungeons that you do'. Best alz per minute, 40 runs, Upgrade Core Medium sells best. Fills the CA 6-minute waits.
+Nearly Hatching Egg ; 40 ; daily ; 270k ; 255 ; S tier (Chunky, Sep 2026): same structure as Steamer Crazy (Easy/Normal/Hard, 40 runs) but drops upgrade cores; Upgrade Core Medium sells best. Menu requirement 270k CP.
+Ever-heated Lava Stone (Awakened) ; 30 ; daily ; 390k ; 240 ; A tier (Chunky): 'the very second dungeons that you do'. 5 DP per run, under a minute when strong, only two bosses, drops highest-grade upgrade cores. His favourite Awakened DX. Min CP from the plan (~390k).
+Frozen Clue (Awakened) ; 30 ; daily ; 390k ; 235 ; A tier (Chunky): Awakened frozen DX, played like Ever-heated Lava Stone: 5 DP per run, highest-grade upgrade cores. Not the same as Frozen Canyon. Name as in Chunky's video; min CP est.
 EOP (Edge of Phantom) ; 30 ; daily ; 550k ; 220 ; Best of the Awakened three: 7 DP per run, ~85M floor, Faded Violet Jewel 60M. Extract only blue Palladium drops; green/violet give worthless Astral Core.
 Awakened IC1 ; 30 ; daily ; 550k ; 214 ; ~130M/h + 7 DP per run. Slot Extender High drops sell 350-400M. Recommended ~600k.
 Awakened IC2 ; 30 ; daily ; 550k ; 205 ; 7 DP per run, more AP and XP than IC1, gives myth XP.
 EOD B1F ; 50 ; daily ; 300k ; 182 ; ~170M/h, 30 free + 20 buyable entries, 2 DP per run. Min CP est.
 World Boss ; 2 ; daily ; 500k ; 170 ; 09:30 and 21:30. Force Gunner never misses, ideal content. Min CP est.
 Seal of Darkness ; 90 ; daily ; 300k ; 157 ; ~597M + 270 DP but takes ~4 hours. Only on long sessions. Min CP est.
-Hazardous Valley ; 40 ; daily ; 200k ; 152 ; ~120M/h + 2-4 DP per run. Include Easy: Upgrade Core Medium is the 2nd most valuable core.
+Hazardous Valley ; 40 ; daily ; 200k ; 190 ; ~120M/h + 2-4 DP per run, 40 runs. Include Easy: Upgrade Core Medium is the 2nd most valuable core. Chunky: 'an incredibly good dungeon'.
 Forgotten Temple B1F ; 30 ; daily ; 300k ; 139 ; ~116M per 50 min. Rotation filler. Min CP est.
 Holy Windmill ; 9 ; daily ; 0 ; 130 ; Wing dungeon (wiki: Holia Windhill), Lv130, any wing rank. 3 per day + 2 resets of 3 (resets cost Force Gems). Kill the mysterious boy in 17-20 s for the secret chest (Potion of Alz 1M-100M). Force wing XP, Essence of Wing (Rare), myth XP.
 Holy Kedrasil ; 6 ; daily ; 650k ; 150 ; Wing dungeon (wiki: Holia Keldrasil), Lv150 + wing rank Rare level 100. 2 per day + 2 resets. More force wing XP, Essence of Wing (Unique). Min CP est.: set the real one in Edit list.
