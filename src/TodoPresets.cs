@@ -7,7 +7,7 @@ namespace CAHelper
     /// Line format: name ; count ; daily|weekly ; min CP ; value ; why
     public static class TodoPresets
     {
-        public const int CatalogVersion = 7;
+        public const int CatalogVersion = 8;
         public static string CatalogName => "Catalog v" + CatalogVersion;
 
         public static readonly string Catalog =
@@ -47,7 +47,7 @@ World Boss ; 2 ; daily ; 500k ; 170 ; 09:30 and 21:30. Force Gunner never misses
 Seal of Darkness ; 90 ; daily ; 300k ; 157 ; ~597M + 270 DP but takes ~4 hours. Only on long sessions. Min CP est.
 Hazardous Valley ; 40 ; daily ; 200k ; 190 ; ~120M/h + 2-4 DP per run, 40 runs. Include Easy: Upgrade Core Medium is the 2nd most valuable core. Chunky: 'an incredibly good dungeon'.
 Forgotten Temple B1F ; 30 ; daily ; 300k ; 139 ; ~116M per 50 min. Rotation filler. Min CP est.
-Holy Windmill ; 9 ; daily ; 0 ; 130 ; Wing dungeon (wiki: Holia Windhill), Lv130, any wing rank. 3 per day + 2 resets of 3 (resets cost Force Gems). Kill the mysterious boy in 17-20 s for the secret chest (Potion of Alz 1M-100M). Force wing XP, Essence of Wing (Rare), myth XP.
+Holy Windmill ; 9 ; daily ; 0 ; 130 ; Wing dungeon (wiki: Holia Windhill), Lv130, any wing rank. 3 per day + 2 resets of 3 (resets cost Force Gems). Force wing XP, Essence of Wing (Rare), myth XP. SECRET CHEST: in the 3rd room a Mysterious Boy appears on the left while you clear the wisps (sometimes in a corner). Kill him at once, he vanishes after a few seconds. Then a secret chest waits after the final boss: Potion of Luck, random alz up to ~100M (Chunky got 1-10M). Check its AH price first: selling may beat drinking it.
 Holy Kedrasil ; 6 ; daily ; 650k ; 150 ; Wing dungeon (wiki: Holia Keldrasil), Lv150 + wing rank Rare level 100. 2 per day + 2 resets. More force wing XP, Essence of Wing (Unique). Min CP est.: set the real one in Edit list.
 Holy Shrine ; 6 ; daily ; 850k ; 170 ; Wing dungeon (wiki: Holia Tristy), Lv170 + wing rank Unique level 100. 2 per day + 2 resets. The last wing dungeon gives the most force wing XP, Essence of Wing (Epic). Min CP est.: set the real one in Edit list.
 Lake in Dusk ; 90 ; daily ; 80k ; 120 ; ~98M/h + 90 DP, 25-35 s runs, slot extender rolls. Fragments from it are only a trickle.
