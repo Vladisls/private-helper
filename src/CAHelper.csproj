@@ -9,7 +9,7 @@
     <Nullable>disable</Nullable>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <Product>Cabal Helper</Product>
-    <Version>2.4.9</Version>
+    <Version>2.4.10</Version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
