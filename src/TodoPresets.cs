@@ -7,7 +7,7 @@ namespace CAHelper
     /// Line format: name ; count ; daily|weekly ; min CP ; value ; why
     public static class TodoPresets
     {
-        public const int CatalogVersion = 10;
+        public const int CatalogVersion = 11;
         public static string CatalogName => "Catalog v" + CatalogVersion;
 
         public static readonly string Catalog =
@@ -47,9 +47,9 @@ World Boss ; 2 ; daily ; 500k ; 170 ; 09:30 and 21:30. Force Gunner never misses
 Seal of Darkness ; 90 ; daily ; 300k ; 157 ; ~597M + 270 DP but takes ~4 hours. Only on long sessions. Min CP est.
 Hazardous Valley ; 40 ; daily ; 200k ; 190 ; ~120M/h + 2-4 DP per run, 40 runs. Include Easy: Upgrade Core Medium is the 2nd most valuable core. Chunky: 'an incredibly good dungeon'.
 Forgotten Temple B1F ; 30 ; daily ; 300k ; 139 ; ~116M per 50 min. Rotation filler. Min CP est.
-Holy Windmill ; 9 ; daily ; 0 ; 130 ; Secret chest: a boy spawns for a short time during the wisps (3rd room, left) - kill him. The chest after the final boss gives a Potion of Luck. 3 runs + 2 resets of 3; force wing XP, myth XP.
-Holy Kedrasil ; 6 ; daily ; 650k ; 150 ; Wing dungeon (wiki: Holia Keldrasil), Lv150 + wing rank Rare level 100. 2 per day + 2 resets. More force wing XP, Essence of Wing (Unique). Min CP est.: set the real one in Edit list.
-Holy Shrine ; 6 ; daily ; 850k ; 170 ; Wing dungeon (wiki: Holia Tristy), Lv170 + wing rank Unique level 100. 2 per day + 2 resets. The last wing dungeon gives the most force wing XP, Essence of Wing (Epic). Min CP est.: set the real one in Edit list.
+Holy Windmill ; 9 ; daily ; 0 ; 130 ; Secret chest: a boy spawns for a short time during the wisps (3rd room, left) - kill him. The chest after the final boss gives a Potion of Luck. 3 entries + 2 resets of 3 (reset 1 Force Gem, then 2; the reset shows once the counter is at 0). Force wing XP, myth XP.
+Holy Keldrasil ; 6 ; daily ; 560k ; 150 ; Wing dungeon, menu requirement 560k CP (wiki: Lv150 + wing rank Rare level 100). 2 entries + 2 resets (1 then 2 Force Gems) = 6. More force wing XP than Windmill, Essence of Wing (Unique), myth XP.
+Holy Shrine ; 6 ; daily ; 640k ; 170 ; Wing dungeon (wiki: Holia Tristy), menu requirement 640k CP (wiki: Lv170 + wing rank Unique level 100). 2 entries + 2 resets = 6. The last wing dungeon gives the most force wing XP, Essence of Wing (Epic).
 Lake in Dusk ; 90 ; daily ; 80k ; 120 ; ~98M/h + 90 DP, 25-35 s runs, slot extender rolls. Fragments from it are only a trickle.
 Legend Arena (Baldus) ; 1 ; daily ; 900k ; 60 ; Guard Sebius, Bloody Ice. Only the top 30 Force Gunners get Baldus Tokens (~5M each). At 518k you scored 200k vs a 600k floor. Min CP est.
 
