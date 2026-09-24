@@ -7,7 +7,7 @@ namespace CAHelper
     /// Line format: name ; count ; daily|weekly ; min CP ; value ; why
     public static class TodoPresets
     {
-        public const int CatalogVersion = 6;
+        public const int CatalogVersion = 7;
         public static string CatalogName => "Catalog v" + CatalogVersion;
 
         public static readonly string Catalog =
@@ -35,7 +35,7 @@ CA5 runs ; 5 ; daily ; 400k ; 501 ; Fragment milestone only. Easy from ~420k CP.
 Frozen Canyon (UDX) ; 30 ; daily ; 900k ; 250 ; First thing every day at 1.1M+: ~160M/h + 8 DP per run, plus 1-2 Faded Violet Jewels (60-80M) per ~30 runs. Menu requirement 900k CP, comfortable at 1.1-1.2M.
 Altar of Sienna B1F ; 30 ; daily ; 200k ; 180 ; B tier (Chunky): after the S and A tier dungeons, 'if you still want to grind some more'. Slower than the others; 6 DP per run, secret room chest drops Prettiest Bracelets (extract and sell the pieces, ~0.8M each).
 Altar of Sienna B2F ; 30 ; daily ; 400k ; 175 ; B tier (Chunky): 'quite valuable as well', same tier as B1F. Separate entries, so it doesn't use up B1F runs. Time 5 runs and note DP + drops to rate it properly. Min CP est.
-Steamer Crazy ; 40 ; daily ; 141k ; 260 ; S tier (Chunky, Sep 2026): one of the 'very first dungeons that you do'. Best alz per minute, 40 runs, Upgrade Core Medium sells best. Fills the CA 6-minute waits.
+Steamer Crazy ; 30 ; daily ; 141k ; 260 ; S tier (Chunky, Sep 2026): one of the 'very first dungeons that you do'. Run only Normal (10) + Hard (20) = 30; skip the 10 Easy. Best alz per minute, Upgrade Core Medium sells best. Fills the CA 6-minute waits.
 Nearly Hatching Egg ; 40 ; daily ; 270k ; 255 ; S tier (Chunky, Sep 2026): same structure as Steamer Crazy (Easy/Normal/Hard, 40 runs) but drops upgrade cores; Upgrade Core Medium sells best. Menu requirement 270k CP.
 Ever-heated Lava Stone (Awakened) ; 30 ; daily ; 390k ; 240 ; A tier (Chunky): 'the very second dungeons that you do'. 5 DP per run, under a minute when strong, only two bosses, drops highest-grade upgrade cores. His favourite Awakened DX. Min CP from the plan (~390k).
 Frozen Clue (Awakened) ; 30 ; daily ; 390k ; 235 ; A tier (Chunky): Awakened frozen DX, played like Ever-heated Lava Stone: 5 DP per run, highest-grade upgrade cores. Not the same as Frozen Canyon. Name as in Chunky's video; min CP est.
