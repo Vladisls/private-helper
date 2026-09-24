@@ -75,23 +75,27 @@ static class T {
     // ---- Catalog, CP filter, sorting ----
     var cpp = new List<string>(); var cat = Todo.ParseList(TodoPresets.Catalog, cpp);
     Check(cpp.Count==0 && cat.Count>=25 && cat.TrueForAll(i => i.Tip.Length > 10 && i.Value > 0), $"catalog: {cat.Count} tasks, all with value + tip {string.Join(" | ",cpp)}");
-    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v4" && !cat.Exists(i => i.Name.StartsWith("Buy dungeon entries") || i.Name.StartsWith("White Gold") || i.Name=="Wing dungeon") && cat.Exists(i => i.Name=="Holy Windmill" && i.MinCp==0) && cat.Exists(i => i.Name=="Holy Shrine" && i.MinCp > 518000), "catalog header");
+    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v5" && !cat.Exists(i => i.Name.StartsWith("Buy dungeon entries") || i.Name.StartsWith("White Gold") || i.Name=="Wing dungeon") && cat.Exists(i => i.Name=="Holy Windmill" && i.MinCp==0) && cat.Exists(i => i.Name=="Holy Shrine" && i.MinCp > 518000), "catalog header");
     Check(Todo.TryParseCp("518k", out var c1) && c1==518000 && Todo.TryParseCp("1.1m", out var c2) && c2==1100000
           && Todo.TryParseCp("518,000", out var c3) && c3==518000 && !Todo.TryParseCp("abc", out _), "CP parses 518k / 1.1m / 518,000");
     Check(Todo.FormatCp(518000)=="518k" && Todo.FormatCp(1100000)=="1.1M" && Todo.FormatCp(1000000)=="1M", "CP formats");
     var at518 = Todo.Available(cat, 518000, weekly:false);
     Check(!at518.Exists(i => i.Name.StartsWith("Awakened IC") || i.Name.StartsWith("EOP") || i.Name.StartsWith("Frozen")), "518k: no 550k+ dungeons in the list");
-    Check(at518[0].Name.StartsWith("Vote") && at518.FindIndex(i=>i.Name=="CA1 runs") < at518.FindIndex(i=>i.Name=="Altar of Sienna B1F")
-          && at518.FindIndex(i=>i.Name=="Altar of Sienna B1F") < at518.FindIndex(i=>i.Name=="Hazardous Valley"), "518k: quick dailies, then CA, then farms by value");
+    var acts = Todo.Available(cat, 518000, weekly:false, action:true);
+    Check(acts.Count==4 && acts[0].Name.StartsWith("Vote") && acts.TrueForAll(i => i.Action && !i.Weekly) && !at518.Exists(i => i.Action),
+          "daily actions in their own list: " + string.Join(", ", acts.ConvertAll(i => i.Name)));
+    Check(Todo.ParseList("X ; 1 ; action", new List<string>())[0].Action && Todo.ParseList("X ; 1 ; action", new List<string>())[0].Key=="D|x", "'action' parses and keeps the daily progress key");
+    Check(at518[0].Name=="Mission War" && at518.FindIndex(i=>i.Name=="CA1 runs") < at518.FindIndex(i=>i.Name=="Altar of Sienna B1F")
+          && at518.FindIndex(i=>i.Name=="Altar of Sienna B1F") < at518.FindIndex(i=>i.Name=="Hazardous Valley"), "518k dungeons: Mission War, then CA, then farms by value");
     var locked518 = Todo.Locked(cat, 518000);
     Check(locked518.Count>0 && locked518[0].MinCp==550000 && locked518[locked518.Count-1].MinCp==1100000, "locked list: 550k first, Frozen Canyon 1.1M last");
     var at600 = Todo.Available(cat, 600000, weekly:false);
     Check(at600.FindIndex(i=>i.Name.StartsWith("EOP")) >= 0 && at600.FindIndex(i=>i.Name.StartsWith("EOP")) < at600.FindIndex(i=>i.Name=="Hazardous Valley"), "600k: EOP unlocked, ranked above Hazardous Valley");
-    Check(Todo.Available(cat, -1, false).Count == cat.FindAll(i=>!i.Weekly).Count, "CP not set: show everything");
+    Check(Todo.Available(cat, -1, false).Count == cat.FindAll(i=>!i.Weekly && !i.Action).Count, "CP not set: show everything");
     var old = Todo.ParseList("CA1 runs ; 5 ; daily ; Only for the milestone", new List<string>())[0];
     Check(old.MinCp==0 && old.Tip=="Only for the milestone", "old 4-field lines still read the tip");
     Check(TodoPresets.IsOutdated("# preset: 500k-1M CP\nx;1") && !TodoPresets.IsOutdated(TodoPresets.Catalog) && !TodoPresets.IsOutdated("# preset: Custom\nx;1")
-          && TodoPresets.IsOutdated("# preset: Catalog v3\nx;1"), "old bracket lists are replaced, custom lists kept");
+          && TodoPresets.IsOutdated("# preset: Catalog v4\nx;1"), "old bracket lists are replaced, custom lists kept");
     // ---- Settings save ----
     var sv = Settings.Parse("", new List<string>()); sv.BossSpawnAfter = S(330); sv.Sound = false; sv.WeeklyResetDay = DayOfWeek.Friday; sv.DailyResetTime = new TimeSpan(6,30,0);
     var rp = new List<string>(); var back = Settings.Parse(sv.ToIni(), rp);

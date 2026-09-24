@@ -10,6 +10,7 @@ namespace CAHelper
     {
         public string Name; public int Target; public bool Weekly; public int Count; public string Tip = "";
         public long MinCp; public int Value;
+        public bool Action;      // quick daily action (vote, claims...): own collapsible section, resets daily
         public bool Done => Count >= Target;
         public string Key => (Weekly ? "W|" : "D|") + Name.Trim().ToLowerInvariant();
     }
@@ -58,9 +59,9 @@ namespace CAHelper
           : cp >= 1000 ? (cp / 1000).ToString(CultureInfo.InvariantCulture) + "k" : cp.ToString(CultureInfo.InvariantCulture);
 
         /// Open tasks you can do at `cp`, most valuable first (list order breaks ties). cp < 0 = CP not set, show all.
-        public static List<TodoItem> Available(List<TodoItem> items, long cp, bool weekly) =>
+        public static List<TodoItem> Available(List<TodoItem> items, long cp, bool weekly, bool action = false) =>
             items.Select((it, i) => (it, i))
-                 .Where(x => !x.it.Done && x.it.Weekly == weekly && (cp < 0 || x.it.MinCp <= cp))
+                 .Where(x => !x.it.Done && x.it.Weekly == weekly && x.it.Action == action && (cp < 0 || x.it.MinCp <= cp))
                  .OrderByDescending(x => x.it.Value).ThenBy(x => x.i)
                  .Select(x => x.it).ToList();
 
@@ -92,8 +93,9 @@ namespace CAHelper
                 {
                     var period = p[2].Trim().ToLowerInvariant();
                     if (period == "weekly" || period == "week" || period == "w") item.Weekly = true;
+                    else if (period == "action" || period == "daily action") item.Action = true;
                     else if (period.Length > 0 && period != "daily" && period != "day" && period != "d")
-                        problems.Add($"Line {lineNo}: '{p[2].Trim()}' should be daily or weekly");
+                        problems.Add($"Line {lineNo}: '{p[2].Trim()}' should be daily, action or weekly");
                 }
                 // New format: ; min CP ; value ; tip.  Old format: ; tip
                 int next = 3;

@@ -19,7 +19,7 @@ namespace CAHelper
         readonly Label footer = new Label { Dock = DockStyle.Bottom, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted, Cursor = Cursors.Hand, TextAlign = ContentAlignment.MiddleLeft };
         readonly ToolTip tips = new ToolTip { ShowAlways = true, AutoPopDelay = 20000, InitialDelay = 350, ReshowDelay = 100 };
         string presetName = "Custom";
-        bool doneExpanded, lockedExpanded;
+        bool doneExpanded, lockedExpanded, actionsExpanded = true;
         long cp = Todo.LoadCp();
         readonly Label cpLine = new Label { Dock = DockStyle.Top, Height = 22, Cursor = Cursors.Hand, TextAlign = ContentAlignment.MiddleLeft, Font = Theme.Title };
         string dailyId, weeklyId;
@@ -150,6 +150,7 @@ namespace CAHelper
             cpLine.Text = cp < 0 ? "⚠ Set your CP to hide tasks you can't do yet  ✎" : $"Your CP: {Todo.FormatCp(cp)}  ✎";
             cpLine.ForeColor = cp < 0 ? Theme.Bad : Theme.Accent;
 
+            var actions = Todo.Available(items, cp, weekly: false, action: true);
             var daily = Todo.Available(items, cp, weekly: false);
             var weekly = Todo.Available(items, cp, weekly: true);
             var locked = Todo.Locked(items, cp);
@@ -164,10 +165,15 @@ namespace CAHelper
                 return h;
             }
 
-            if (daily.Count > 0) Add(Header("Daily · most valuable first"));
+            if (actions.Count > 0)
+            {
+                Add(Toggle($"Daily actions ({actions.Count})", actionsExpanded, () => actionsExpanded = !actionsExpanded));
+                if (actionsExpanded) foreach (var it in actions) Add(Row(it, RowKind.Open));
+            }
+            if (daily.Count > 0) Add(Header("Daily dungeons · most valuable first"));
             foreach (var it in daily) Add(Row(it, RowKind.Open));
             if (weekly.Count > 0) { Add(Header("Weekly")); foreach (var it in weekly) Add(Row(it, RowKind.Open)); }
-            if (daily.Count + weekly.Count == 0)
+            if (actions.Count + daily.Count + weekly.Count == 0)
                 Add(Header(items.Count == 0 ? "No tasks. Click \"List\" > Edit list." : "All done for today ✓"));
 
             if (locked.Count > 0)

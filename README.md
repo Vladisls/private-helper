@@ -75,6 +75,8 @@ Next pair of instances: Start again.
 
 DAILY TO-DO
 - Set your CP once (click "Your CP" at the top of the panel, or tray > Settings).
+  Quick daily actions (vote, guild treasure, daily cash shop GM buff, Chloe token) sit in
+  their own foldable "Daily actions" section at the top.
   The panel then shows only tasks you can do at that CP, most valuable first:
   quick dailies, then Chaos Arena (while you still need fragments), then farms by
   alz per hour (DP counted at 250k alz each).
@@ -84,7 +86,7 @@ DAILY TO-DO
 - Click + or - on a row. Right-click a task name to set it straight to done (or back to 0).
 - Finished rows move into "Done (n)" at the bottom; click it to fold/unfold.
 - "List > Edit list in Notepad" to change tasks. One task per line:
-      name ; how many ; daily or weekly ; min CP ; value ; why
+      name ; how many ; daily, action or weekly ; min CP ; value ; why
       Awakened IC1 ; 30 ; daily ; 550k ; 214 ; 7 DP per run
   Save and the panel updates by itself. Some minimum CPs are estimates (marked "est."
   in the tooltip): fix them in the list when the game tells you otherwise.
