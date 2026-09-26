@@ -75,14 +75,14 @@ static class T {
     // ---- Catalog, CP filter, sorting ----
     var cpp = new List<string>(); var cat = Todo.ParseList(TodoPresets.Catalog, cpp);
     Check(cpp.Count==0 && cat.Count>=25 && cat.TrueForAll(i => i.Tip.Length > 10 && i.Value > 0), $"catalog: {cat.Count} tasks, all with value + tip {string.Join(" | ",cpp)}");
-    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v12" && cat.Find(i => i.Name=="Steamer Crazy").Target==30 && cat.Find(i => i.Name=="Holy Windmill").Tip.StartsWith("Secret chest: a boy spawns") && !cat.Exists(i => i.Name.StartsWith("Buy dungeon entries") || i.Name.StartsWith("White Gold") || i.Name=="Wing dungeon") && cat.Exists(i => i.Name=="Holy Windmill" && i.MinCp==0) && cat.Exists(i => i.Name=="Holy Shrine" && i.MinCp == 640000) && cat.Exists(i => i.Name=="Holy Keldrasil" && i.MinCp == 560000), "catalog header");
+    Check(TodoPresets.NameOf(TodoPresets.Catalog)=="Catalog v13" && cat.Find(i => i.Name=="Steamer Crazy").Target==30 && cat.Find(i => i.Name=="Holy Windmill").Tip.StartsWith("Secret chest: a boy spawns") && !cat.Exists(i => i.Name.StartsWith("Buy dungeon entries") || i.Name.StartsWith("White Gold") || i.Name=="Wing dungeon") && cat.Exists(i => i.Name=="Holy Windmill" && i.MinCp==0) && cat.Exists(i => i.Name=="Holy Shrine" && i.MinCp == 640000) && cat.Exists(i => i.Name=="Holy Keldrasil" && i.MinCp == 560000), "catalog header");
     Check(Todo.TryParseCp("518k", out var c1) && c1==518000 && Todo.TryParseCp("1.1m", out var c2) && c2==1100000
           && Todo.TryParseCp("518,000", out var c3) && c3==518000 && !Todo.TryParseCp("abc", out _), "CP parses 518k / 1.1m / 518,000");
     Check(Todo.FormatCp(518000)=="518k" && Todo.FormatCp(1100000)=="1.1M" && Todo.FormatCp(1000000)=="1M", "CP formats");
     var at518 = Todo.Available(cat, 518000, weekly:false);
     Check(!at518.Exists(i => i.MinCp > 518000) && !at518.Exists(i => i.Name.StartsWith("Awakened IC") || i.Name.StartsWith("EOP") || i.Name.StartsWith("Frozen Canyon")), "518k: no 550k+ dungeons in the list");
     var acts = Todo.Available(cat, 518000, weekly:false, action:true);
-    Check(acts.Count==5 && acts[0].Name.StartsWith("Vote") && acts.TrueForAll(i => i.Action && !i.Weekly) && !at518.Exists(i => i.Action),
+    Check(acts.Count==6 && acts[0].Name=="Vote" && acts.TrueForAll(i => i.Action && !i.Weekly) && !at518.Exists(i => i.Action),
           "daily actions in their own list: " + string.Join(", ", acts.ConvertAll(i => i.Name)));
     Check(Todo.ParseList("X ; 1 ; action", new List<string>())[0].Action && Todo.ParseList("X ; 1 ; action", new List<string>())[0].Key=="D|x", "'action' parses and keeps the daily progress key");
     Check(at518[0].Name=="Mission War" && at518.FindIndex(i=>i.Name=="CA1 runs") < at518.FindIndex(i=>i.Name=="Steamer Crazy")
@@ -99,7 +99,7 @@ static class T {
     var old = Todo.ParseList("CA1 runs ; 5 ; daily ; Only for the milestone", new List<string>())[0];
     Check(old.MinCp==0 && old.Tip=="Only for the milestone", "old 4-field lines still read the tip");
     Check(TodoPresets.IsOutdated("# preset: 500k-1M CP\nx;1") && !TodoPresets.IsOutdated(TodoPresets.Catalog) && !TodoPresets.IsOutdated("# preset: Custom\nx;1")
-          && TodoPresets.IsOutdated("# preset: Catalog v11\nx;1"), "old bracket lists are replaced, custom lists kept");
+          && TodoPresets.IsOutdated("# preset: Catalog v12\nx;1"), "old bracket lists are replaced, custom lists kept");
     // ---- Settings save ----
     var sv = Settings.Parse("", new List<string>()); sv.BossSpawnAfter = S(330); sv.Sound = false; sv.WeeklyResetDay = DayOfWeek.Friday; sv.DailyResetTime = new TimeSpan(6,30,0);
     var rp = new List<string>(); var back = Settings.Parse(sv.ToIni(), rp);
