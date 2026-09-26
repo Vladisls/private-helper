@@ -7,7 +7,7 @@ namespace CAHelper
     /// Line format: name ; count ; daily|weekly ; min CP ; value ; why
     public static class TodoPresets
     {
-        public const int CatalogVersion = 13;
+        public const int CatalogVersion = 14;
         public static string CatalogName => "Catalog v" + CatalogVersion;
 
         public static readonly string Catalog =
@@ -22,7 +22,7 @@ namespace CAHelper
 Vote ; 1 ; action ; 0 ; 990 ; Vote on the website: the reward comes whether or not you play long, so do it even in a short session.
 Voter Sigil ; 1 ; action ; 0 ; 940 ; Timed buff from Event Girl Yul. Take it at the start of a long farming session, not before a short one, or most of it is wasted.
 Guild treasure claim ; 1 ; action ; 0 ; 985 ; Guild window > Guild Treasure > Receive all (guild main character must be set). Elixir material buys honor potions in the Guild Shop.
-Daily cash shop (GM buff) ; 3 ; action ; 0 ; 975 ; GM Blessing lv5 from the daily cash shop, 3 per day. Pop it before hard runs: one failed CA run loses that tier's reward for the day.
+Daily cash shop (GM buff) ; 3 ; action ; 0 ; 935 ; Timed buff (GM Blessing lv5), 3 per day. Pop it at the start of a long session or right before hard runs, never before a short one: one failed CA run loses that tier's reward for the day.
 Chloe token quest ; 1 ; action ; 0 ; 970 ; New Material Development Support at Chloe: craft from 3x Upgrade Core (Highest), hand in with the Remote NPC button. 15 tokens pay Tempus' Ring registration instead of 300M. Never buy tokens for DP.
 Daily dungeons (next to minimap) ; 3 ; action ; 0 ; 965 ; The 3 dungeons that change every day, opened from the button next to the minimap.
 Mission War ; 1 ; daily ; 0 ; 900 ; War XP -> honor at the Morrison officer (5,000 WEXP = 45M honor). Merit tickets -> evaluate and report medals for more honor. Honor class 20 unlocks the Honor Medal.
