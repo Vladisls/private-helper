@@ -583,6 +583,14 @@ namespace CAHelper
                 if (busyInv) return;
                 busyInv = true;
                 var copy = (Bitmap)bmp.Clone(); var frameNow = (Bitmap)bmp.Clone(); var gridNow = g; var slotsNow = slots;
+                // Show the shape reader's counts right away (a few ms); the text reader confirms or corrects them below.
+                {
+                    var quick = new Dictionary<string, int>();
+                    foreach (var sl in slotsNow) if (sl.Count.HasValue) quick[sl.Item] = quick.TryGetValue(sl.Item, out int c0) ? c0 + sl.Count.Value : sl.Count.Value;
+                    smoother.Add(quick); readsSinceStart++;
+                    ApplyRead(smoother.Stable(), smoother.Gone());
+                    Render();
+                }
                 BeginInvoke((Action)(async () =>
                 {
                     int?[] ocr = null;
