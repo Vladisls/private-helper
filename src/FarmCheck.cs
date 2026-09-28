@@ -544,6 +544,47 @@ namespace CAHelper
             return learned;
         }
 
+        /// Smooths inventory reads over time: a stack count is the most common value of the last few reads,
+        /// and a core only counts as missing after it has been absent in several reads in a row.
+        public sealed class CountSmoother
+        {
+            public int Window = 5, MissingAfter = 3;
+            readonly Dictionary<string, List<int>> recent = new Dictionary<string, List<int>>();
+            readonly Dictionary<string, int> missingStreak = new Dictionary<string, int>();
+            readonly HashSet<string> everSeen = new HashSet<string>();
+
+            public void Clear() { recent.Clear(); missingStreak.Clear(); everSeen.Clear(); }
+
+            /// Feed one read (name -> count for the cores found in it).
+            public void Add(IDictionary<string, int> read)
+            {
+                foreach (var kv in read)
+                {
+                    if (!recent.TryGetValue(kv.Key, out var l)) recent[kv.Key] = l = new List<int>();
+                    l.Add(kv.Value); if (l.Count > Window) l.RemoveAt(0);
+                    missingStreak[kv.Key] = 0; everSeen.Add(kv.Key);
+                }
+                foreach (var name in everSeen) if (!read.ContainsKey(name)) missingStreak[name] = (missingStreak.TryGetValue(name, out int m) ? m : 0) + 1;
+            }
+
+            /// Cores seen in the recent reads (not missing for MissingAfter reads) with their most common count.
+            public Dictionary<string, int> Stable()
+            {
+                var d = new Dictionary<string, int>();
+                foreach (var kv in recent)
+                {
+                    if (missingStreak.TryGetValue(kv.Key, out int m) && m >= MissingAfter) continue;
+                    d[kv.Key] = kv.Value.GroupBy(v => v).OrderByDescending(g => g.Count()).ThenByDescending(g => g.Key).First().Key;
+                }
+                return d;
+            }
+
+            /// Cores that were seen earlier but have been absent for MissingAfter reads or more.
+            public List<string> Gone() => missingStreak.Where(kv => kv.Value >= MissingAfter).Select(kv => kv.Key).ToList();
+
+            public int Reads => recent.Values.DefaultIfEmpty(new List<int>()).Max(l => l.Count);
+        }
+
         /// Cores that should be checked with the player: at the start every known core that wasn't found;
         /// later every core that was there before (count > 0) but isn't found now. Already-confirmed ones are skipped.
         public static List<string> MissingToConfirm(IEnumerable<string> expected, IDictionary<string, int> found,

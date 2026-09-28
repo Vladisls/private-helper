@@ -69,6 +69,8 @@ namespace CAHelper
         bool busyEnd, busyLoot;
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
+        readonly FarmCheck.CountSmoother smoother = new FarmCheck.CountSmoother();
+        int readsSinceStart;
         (List<string> names, Dictionary<string, int> counts, bool start)? pending;       // waiting for the player's answer
         readonly FlowLayoutPanel confirmBox = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Visible = false, Padding = new Padding(0, 4, 0, 4) };
         readonly Label confirmText = new Label { AutoSize = true, ForeColor = Color.FromArgb(245, 196, 81), Font = Theme.Title, UseMnemonic = false };
@@ -179,7 +181,7 @@ namespace CAHelper
         {
             Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
             running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
-            confirmedEmpty.Clear(); pending = null;
+            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0;
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
             Render();
@@ -302,9 +304,13 @@ namespace CAHelper
                     overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(x, gy + (int)g.Y), B = new Point(x, gy + (int)Math.Round(g.Y + 8 * g.PitchY)), C = Color.Lime });
                     overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(gx + (int)g.X, y), B = new Point(gx + (int)Math.Round(g.X + 8 * g.PitchX), y), C = Color.Lime });
                 }
+                var stable = running ? smoother.Stable() : null;
                 foreach (var sl in ovSlots)
+                {
+                    string shown = stable != null && stable.TryGetValue(sl.Item, out int sv) ? sv.ToString() : (sl.Count?.ToString() ?? "?");
                     overlay.Tags.Add(new DebugOverlay.Note { P = new Point(gx + (int)(g.X + sl.Col * g.PitchX) + 2, gy + (int)(g.Y + sl.Row * g.PitchY) + 2),
-                        Text = Short(sl.Item) + " " + (sl.Count?.ToString() ?? "?"), C = sl.Count.HasValue ? Color.Yellow : Color.Red });
+                        Text = Short(sl.Item) + " " + shown, C = sl.Count.HasValue ? Color.Yellow : Color.Red });
+                }
                 if (ovTab != null)
                 {
                     double sc = g.Scale;
@@ -416,7 +422,6 @@ namespace CAHelper
 
         void CheckInventory(DateTime now)
         {
-            if (pending != null) return;                                       // waiting for the player's answer
             using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
@@ -484,7 +489,10 @@ namespace CAHelper
                 var counts = new Dictionary<string, int>();
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                 if (slots.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
-                ApplyRead(counts);
+                smoother.Add(counts); readsSinceStart++;
+                var stable = smoother.Stable();
+                // Take a decision only once the smoother has a few reads; missing cores need MissingAfter absent reads.
+                if (readsSinceStart >= 2 || baseline != null) ApplyRead(stable, smoother.Gone());
             }
         }
 
@@ -521,11 +529,16 @@ namespace CAHelper
         }
 
         /// Takes a finished inventory read. Missing cores are confirmed with the player before they count as 0.
-        void ApplyRead(Dictionary<string, int> counts)
+        void ApplyRead(Dictionary<string, int> counts, List<string> goneNow = null)
         {
             var missing = FarmCheck.MissingToConfirm(icons.Select(i => i.name), counts, baseline, confirmedEmpty);
+            // At the start every never-seen core is a candidate; later only cores absent for several reads in a row.
+            if (baseline != null) missing = missing.Where(n => goneNow != null && goneNow.Contains(n)).ToList();
+            else if (readsSinceStart < smoother.MissingAfter) missing.Clear();     // give the first reads a chance to see everything
+            if (missing.Count == 0 && pending != null) { pending = null; Debug("missing-core question cleared: the cores were seen again"); }
             if (missing.Count > 0)
             {
+                if (pending != null && pending.Value.names.SequenceEqual(missing)) { pending = (missing, counts, pending.Value.start); return; }
                 Debug("asking about missing cores: " + string.Join(", ", missing));
                 bool start = baseline == null;
                 pending = (missing, counts, start);

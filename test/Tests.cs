@@ -366,6 +366,15 @@ static class T {
     var endC = new Dictionary<string,int>{ ["UC High"]=156, ["FC Low"]=1, ["UC Low"]=0 };
     var gains = FarmCheck.Gains(baseL, endC);
     Check(gains["UC High"]==12 && gains["FC Low"]==1 && gains["UC Low"]==-9, "gains: new core from 0 counts +1, used-up stack counts -9");
+    var sm = new FarmCheck.CountSmoother();
+    foreach (var v in new[]{ 158, 58, 158, 158, 58 }) sm.Add(new Dictionary<string,int>{ ["FC High"]=v, ["FC Med"]=16 });
+    Check(sm.Stable()["FC High"]==158 && sm.Stable()["FC Med"]==16, "smoother: 158 wins over an occasional 58");
+    sm.Add(new Dictionary<string,int>{ ["FC High"]=158 }); sm.Add(new Dictionary<string,int>{ ["FC High"]=158 });
+    Check(sm.Stable().ContainsKey("FC Med") && sm.Gone().Count==0, "a core missing in 2 reads is not gone yet");
+    sm.Add(new Dictionary<string,int>{ ["FC High"]=158 });
+    Check(!sm.Stable().ContainsKey("FC Med") && sm.Gone().SequenceEqual(new[]{"FC Med"}), "missing in 3 reads in a row: gone");
+    sm.Add(new Dictionary<string,int>{ ["FC High"]=158, ["FC Med"]=16 });
+    Check(sm.Stable().ContainsKey("FC Med") && sm.Gone().Count==0, "seen again: back, question would clear");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
     var rr = FarmCheck.ParseEndWindow(endLines);
     Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");
