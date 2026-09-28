@@ -396,7 +396,12 @@ namespace CAHelper
                     {
                         var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult pres);
                         ovAnchorRes = pres; ovAnchorCap = InvCapture; ovAnchor = pres.Info; ovAnchorOk = pres.Ok;
-                        var (g2, slots) = pres.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, Digits)) : FarmCheck.BestRead(img, g, icons, Digits);
+                        var (g2, slots) = pres.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, Digits, 8, 8, slotIdentity)) : FarmCheck.BestRead(img, g, icons, Digits);
+                        if (pres.Ok)
+                        {
+                            foreach (var sl in slots) slotIdentity[(sl.Row, sl.Col)] = sl.Item;
+                            foreach (var k in slotIdentity.Keys.ToList()) if (!slots.Any(x => x.Row == k.r && x.Col == k.c)) slotIdentity.Remove(k);
+                        }
                         ovGrid = g2; ovSlots = slots; ovInv = $"open, contrast {g.Score:0.00}, {slots.Select(x => x.Item).Distinct().Count()} core types";
                         double td = coreTab == null ? -1 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, g2));
                         ovTab = td < 0 ? "Tab: not learned yet" : td <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({td:0.0})" : $"Other tab? ({td:0.0} > {FarmCheck.TabMatchMax})";
