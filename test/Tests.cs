@@ -249,6 +249,23 @@ static class T {
         int nearestOther = FarmCheck.Digits.Where(d => d.d != '7' && d.d != '_').Min(d => FarmCheck.CellDist(seven, d.cell));
         Check(nearestOther > FarmCheck.DigitMatchMax, $"7 doesn't clash with other digits (nearest other digit {nearestOther}, limit {FarmCheck.DigitMatchMax})");
       }
+      var ffc = System.IO.Path.Combine(dataDir, "livefc.bin");
+      if (System.IO.File.Exists(ffc)) {
+        var lv = Load(ffc);
+        var lx = new List<int>(); var ly = new List<int>();
+        for (int x = 0; x < lv.W; x++) { int n = 0; for (int y = 0; y < lv.H; y++) { lv.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) lx.Add(x); }
+        for (int y = 0; y < lv.H; y++) { int n = 0; for (int x = 0; x < lv.W; x++) { lv.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) ly.Add(y); }
+        var lg = new Grid { X = lx.First(), Y = ly.First(), PitchX = (lx.Last() - lx.First()) / 8.0, PitchY = (ly.Last() - ly.First()) / 8.0 };
+        foreach (var (name, c) in new[]{ ("Force Core (Medium)", 3), ("Force Core (Low)", 4) }) {
+          var f = FarmCheck.IconFeature(lv, lg, 1, c);
+          var ds = FarmCheck.Icons.Select(t => (t.name, d: FarmCheck.Dist(f, t.f))).OrderBy(t => t.d).ToList();
+          Console.WriteLine($"LIVE {name}: nearest {ds[0].name} {ds[0].d:0.00}, 2nd {ds[1].name} {ds[1].d:0.00}; empty {FarmCheck.Dist(f, FarmCheck.EmptySlot):0.00}");
+        }
+        var liveRead = FarmCheck.ReadInventory(lv, lg, FarmCheck.DefaultIcons(), digs);
+        Check(liveRead.Any(x => x.Item == "Force Core (Medium)" && x.Count == 16) && liveRead.Any(x => x.Item == "Force Core (Low)" && x.Count == 2), "live capture: FC Medium 16 and FC Low 2 found with the live icons");
+        {
+        }
+      }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
         var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459, 8, 8, FarmCheck.RefPitch * 0.75);

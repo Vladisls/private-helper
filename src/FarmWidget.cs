@@ -40,7 +40,7 @@ namespace CAHelper
 
         // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
         Rectangle invArea = new Rectangle(1905, 240, 620, 615), endArea = new Rectangle(209, 284, 630, 745), lootArea = new Rectangle(2105, 1195, 395, 160);
-        List<(string name, double[] f)> icons = FarmCheck.Icons.ToList();
+        List<(string name, double[] f)> icons = FarmCheck.DefaultIcons();
         readonly List<(char d, string cell)> extraDigits = new List<(char, string)>();
         List<string> rareWords = new List<string> { "Jewel", "Slot Extender", "Potion of Luck", "Stone" };
 
@@ -111,7 +111,7 @@ namespace CAHelper
         {
             string Rs(Rectangle r) => $"{r.X},{r.Y},{r.Width},{r.Height}";
             var lines = new List<string> { "# Cabal Helper Farm Tracker settings (written by the helper)", "inventory=" + Rs(invArea), "end=" + Rs(endArea), "loot=" + Rs(lootArea), "rare=" + string.Join(", ", rareWords) };
-            if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.Icons))
+            if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.DefaultIcons()) && !icons.SequenceEqual(FarmCheck.Icons))
                 foreach (var (n, f) in icons) lines.Add("icon:" + n + "=" + string.Join(" ", f.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture))));
             foreach (var (d, cell) in extraDigits) lines.Add("digit:" + d + "=" + cell);
             if (coreTab != null) lines.Add("coretab=" + string.Join(" ", coreTab.Select(x => x.ToString("0.0", CultureInfo.InvariantCulture))));
@@ -143,7 +143,7 @@ namespace CAHelper
             if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons, digits and core tab are forgotten. The farm log is kept.",
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
-            icons = FarmCheck.Icons.ToList(); extraDigits.Clear(); coreTab = null; grid = null;
+            icons = FarmCheck.DefaultIcons(); extraDigits.Clear(); coreTab = null; grid = null; expectedPitchOverride = null;
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
             Debug("RESET: areas back to defaults, learned icons/digits/core tab forgotten");
             Render();
