@@ -44,6 +44,17 @@ namespace CAHelper
             catch { return false; }
         }
 
+        [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint affinity);
+        const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
+        /// True when this Windows can hide our windows from screen captures (Windows 10 2004+).
+        public static bool CaptureExclusionSupported { get; private set; } = true;
+        /// Keeps the window visible to the player but invisible to screen captures, so the helper never reads its own overlays.
+        public static void ExcludeFromCapture(IntPtr hWnd)
+        {
+            try { if (!SetWindowDisplayAffinity(hWnd, WDA_EXCLUDEFROMCAPTURE)) CaptureExclusionSupported = false; }
+            catch (EntryPointNotFoundException) { CaptureExclusionSupported = false; }
+        }
+
         public static TimeSpan IdleTime()
         {
             var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO)) };
@@ -126,6 +137,8 @@ namespace CAHelper
                 return cp;
             }
         }
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Native.ExcludeFromCapture(Handle); }
+
         /// Borderless-windowed games can push themselves on top; re-assert without stealing focus.
         public void KeepOnTop()
         {

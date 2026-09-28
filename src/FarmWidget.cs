@@ -232,9 +232,9 @@ namespace CAHelper
             lastCheck = now;
             try
             {
-                CheckEnd(now); CheckInventory(now);
+                using (OverlayHidden()) { CheckEnd(now); CheckInventory(now); }
                 if (!running) return default;                                     // stopped by the final inventory read
-                CheckLoot();
+                using (OverlayHidden()) CheckLoot();
                 if (finishing && (now - finishStarted).TotalSeconds >= FinishTimeoutSeconds) { StopSession(); return default; }
             }
             catch (Exception ex) { Warn("⚠ " + ex.Message); }
@@ -269,6 +269,15 @@ namespace CAHelper
                 }));
             }
         }
+
+        /// Older Windows can't exclude windows from captures: hide the overlay while capturing instead.
+        IDisposable OverlayHidden()
+        {
+            if (overlay == null || Native.CaptureExclusionSupported) return null;
+            overlay.Visible = false;
+            return new Restore(() => { if (overlay != null) overlay.Visible = true; });
+        }
+        sealed class Restore : IDisposable { readonly Action a; public Restore(Action a) { this.a = a; } public void Dispose() => a(); }
 
         void SetOverlay(bool on)
         {
@@ -315,6 +324,7 @@ namespace CAHelper
             lastProbe = now;
             try
             {
+                using (OverlayHidden())
                 using (var bmp = PartyOcr.Capture(InvCapture))
                 {
                     var img = PartyOcr.ToImg(bmp); int top = img.H - invArea.Height;
@@ -330,6 +340,7 @@ namespace CAHelper
                         ovTabColor = td >= 0 && td > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
                     }
                 }
+                using (OverlayHidden())
                 using (var bmp = PartyOcr.Capture(endArea))
                 { bool seen = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp)); ovEnd = seen ? "seen" : "not seen"; ovEndColor = seen ? Color.Lime : Color.HotPink; }
             }

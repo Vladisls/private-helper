@@ -317,6 +317,23 @@ static class T {
               "live Debug capture: all 10 cores and counts with the default icons -> " + gotLive);
         foreach (var l in live) { var m = FarmCheck.MatchIcon(l.f, FarmCheck.DefaultIcons()); Check(m != null && m.Value.name == l.name && m.Value.d < 0.01, "live icon matches its own core unambiguously: " + l.name); }
       }
+      // grid picker must prefer the grid that reads real digits over a shifted one that reads "1"s
+      { var gOk = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var (gPick, sPick) = FarmCheck.BestRead(inv, gOk, icons, digs);
+        Check(sPick.Count(x => x.Cells.Count > 0) == 10 && sPick.All(x => x.Count > 1 || x.Cells.Count > 0), "grid picker keeps the alignment where counts come from real digits"); }
+      var foff = System.IO.Path.Combine(dataDir, "off.bin");
+      if (System.IO.File.Exists(foff)) {
+        var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
+        foreach (var (label, gfn) in new (string, Func<Grid>)[] {
+            ("FindGrid area, pitch 0", () => FarmCheck.FindGrid(ofi, 487, 143, 658, 642)),
+            ("FindGrid area, pitch 76.9", () => FarmCheck.FindGrid(ofi, 487, 143, 658, 642, 8, 8, 76.9)),
+            ("FindGridNear area, 76.9", () => FarmCheck.FindGridNear(ofi, 487, 143, 658, 642, 76.9)),
+            ("FindGrid whole image, pitch 0", () => FarmCheck.FindGrid(ofi, 0, 0, ofi.W, ofi.H)),
+            ("LocateInventory", () => FarmCheck.LocateInventory(ofi) ?? new Grid()) }) {
+          var g = gfn();
+          var rd = FarmCheck.BestRead(ofi, g, FarmCheck.DefaultIcons(), digs);
+          Console.WriteLine($"OFF {label}: grid {g.X:0},{g.Y:0} pitch {g.PitchX:0.00}x{g.PitchY:0.00} contrast {g.Score:0.00} weakest {FarmCheck.WeakestLine(ofi, g):0.0} -> read grid {rd.grid.X:0},{rd.grid.Y:0}: " + string.Join(",", rd.slots.Select(x => x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC") + "=" + (x.Count?.ToString() ?? "?"))));
+        }
+      }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
         var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459);

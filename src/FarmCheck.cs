@@ -518,7 +518,9 @@ namespace CAHelper
                 {
                     var cand = g; cand.X += dx; cand.Y += dy;
                     var read = ReadInventory(img, cand, icons, digits);
-                    double score = read.Count * 10 + read.Count(r => r.Count.HasValue) * 5 - read.Sum(r => r.IconDist) - read.Count(r => r.Count == 1) * 2;
+                    // Only counts that came from real digits prove the grid is aligned; "1" means no digits were found.
+                    int digitReads = read.Count(r => r.Count.HasValue && r.Cells.Count > 0);
+                    double score = read.Count * 10 + digitReads * 8 - read.Sum(r => r.IconDist) - read.Count(r => r.Count == 1 && r.Cells.Count == 0) * 3;
                     if (score > best.Item3) best = (cand, read, score);
                 }
             return (best.Item1, best.Item2);

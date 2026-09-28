@@ -34,6 +34,7 @@ namespace CAHelper
                 return cp;
             }
         }
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Native.ExcludeFromCapture(Handle); }
         const int WM_MOUSEACTIVATE = 0x21, MA_NOACTIVATE = 3;
         protected override void WndProc(ref Message m)
         {
