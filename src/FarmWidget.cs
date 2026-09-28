@@ -113,7 +113,9 @@ namespace CAHelper
         void StartSession()
         {
             running = true; started = DateTime.Now; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
-            startStop.Text = "Stop session"; Render();
+            startStop.Text = "Stop session";
+            if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
+            Render();
         }
 
         /// Before stopping, make sure the final core counts are recent: if the core tab wasn't read in the last
@@ -218,7 +220,8 @@ namespace CAHelper
                 var counts = new Dictionary<string, int>();
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                 if (slots.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
-                if (baseline == null) baseline = counts; else current = counts;
+                if (baseline == null) { baseline = counts; if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
+                else current = counts;
                 if (finishing) { StopSession(); return; }
             }
         }
@@ -301,6 +304,8 @@ namespace CAHelper
             if (status.Text != st) status.Text = st;
             var lines = new List<Ui.Line>();
             void Line(string t, Color col, bool bold = false) => lines.Add(new Ui.Line(t, col, bold));
+            if (running && !finishing && baseline == null)
+                Line("Open the core tab for a moment to save the start counts. Runs and drops are already being counted.", Color.FromArgb(245, 196, 81), true);
             if (finishing)
                 Line($"Open the core tab for a moment to save the final counts. Stops by itself once read ({Math.Max(0, FinishTimeoutSeconds - (int)(DateTime.Now - finishStarted).TotalSeconds)} s).", Color.FromArgb(245, 196, 81), true);
 

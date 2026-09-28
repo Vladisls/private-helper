@@ -113,8 +113,8 @@ FARM TRACKER
   2560x1440 screen; on another resolution use "Areas & learning" to set them.
 - Start session, then play as usual:
   * every "Quest Dungeon Cleared!" window counts a run, with its time, dungeon and DP;
-  * open the core tab for about a second at the start and at the end: the core stacks are
-    read and the gains shown (and per hour after 5 minutes);
+  * open the core tab for about a second at the start (a yellow prompt asks for it) and at
+    the end: the core stacks are read and the gains shown (and per hour after 5 minutes);
   * rare drops (Jewel, Slot Extender, Potion of Luck, Stone) are picked up from the loot feed.
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
