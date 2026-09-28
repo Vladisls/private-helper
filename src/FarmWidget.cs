@@ -35,6 +35,7 @@ namespace CAHelper
         List<string> lastLoot; long lootPrint;
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
         Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
+        double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         bool busyEnd, busyLoot;
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
@@ -82,6 +83,7 @@ namespace CAHelper
                 else if (k == "rare") rareWords = v.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (k.StartsWith("icon:")) learnedIcons.Add((k.Substring(5), v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
                 else if (k.StartsWith("digit:") && k.Length == 7) extraDigits.Add((k[6], v));
+                else if (k == "coretab") coreTab = v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray();
             }
             if (learnedIcons.Count > 0) icons = learnedIcons;
         }
@@ -93,6 +95,7 @@ namespace CAHelper
             if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.Icons))
                 foreach (var (n, f) in icons) lines.Add("icon:" + n + "=" + string.Join(" ", f.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture))));
             foreach (var (d, cell) in extraDigits) lines.Add("digit:" + d + "=" + cell);
+            if (coreTab != null) lines.Add("coretab=" + string.Join(" ", coreTab.Select(x => x.ToString("0.0", CultureInfo.InvariantCulture))));
             try { File.WriteAllLines(ConfigPath, lines); } catch { }
         }
 
@@ -116,7 +119,7 @@ namespace CAHelper
         {
             var r = AreaPicker.Pick(msg);
             if (r == null) return;
-            area = r.Value; if (resetGrid) grid = null;
+            area = r.Value; if (resetGrid) { grid = null; coreTab = null; }
             SaveConfig(); Render();
         }
 
@@ -210,19 +213,29 @@ namespace CAHelper
             }
         }
 
+        /// The inventory area plus the tab strip above it (so the active tab can be checked).
+        int TabMargin => (int)Math.Round(70 * invArea.Height / 614.0);
+        Rectangle InvCapture => new Rectangle(invArea.X, Math.Max(0, invArea.Y - TabMargin), invArea.Width, invArea.Height + Math.Min(invArea.Y, TabMargin));
+
         void CheckInventory(DateTime now)
         {
             if (pending != null) return;                                       // waiting for the player's answer
-            using (var bmp = PartyOcr.Capture(invArea))
+            using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
-                if (grid == null) { var g0 = FarmCheck.FindGrid(img, 0, 0, img.W, img.H); if (!FarmCheck.InventoryOpen(img, g0)) { invOpenSince = DateTime.MinValue; return; } grid = g0; }
+                int top = img.H - invArea.Height;
+                if (grid == null) { var g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height); if (!FarmCheck.InventoryOpen(img, g0)) { invOpenSince = DateTime.MinValue; return; } grid = g0; }
                 if (!FarmCheck.InventoryOpen(img, grid.Value)) { invOpenSince = DateTime.MinValue; return; }
                 if (invOpenSince == DateTime.MinValue) invOpenSince = now;
                 if ((now - invOpenSince).TotalSeconds < 0.5 || (now - lastInvRead).TotalSeconds < 1) return;   // open for 0.5 s, read once a second
                 lastInvRead = now;
+                // Another inventory tab open? Compare the tab strip with the core tab's.
+                if (coreTab != null && FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value)) > FarmCheck.TabMatchMax) return;
                 var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits);
-                if (slots.Count == 0) return;                                      // another tab: no cores here
+                int found = slots.Select(x => x.Item).Distinct().Count();
+                int expectedFound = baseline != null ? baseline.Count(kv => kv.Value > 0) : Math.Min(5, icons.Count / 2);
+                if (found == 0 || found * 2 < expectedFound) return;             // too few cores: not the core tab
+                if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); }   // first good read: remember this tab
                 grid = g; lastInvImg = img; lastSlots = slots;
                 var counts = new Dictionary<string, int>();
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
@@ -300,16 +313,16 @@ namespace CAHelper
         // ---------- learning ----------
         void LearnIcons()
         {
-            using (var bmp = PartyOcr.Capture(invArea))
+            using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
-                var g = FarmCheck.FindGrid(img, 0, 0, img.W, img.H);
+                var g = FarmCheck.FindGrid(img, 0, img.H - invArea.Height, img.W, invArea.Height);
                 if (!FarmCheck.InventoryOpen(img, g)) { MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return; }
                 g = FarmCheck.BestRead(img, g, icons, Digits).grid;
                 // same layout as taught: top row Upgrade Cores highest -> lowest, bottom row Force Cores
                 var learned = new List<(string, double[])>();
                 for (int i = 0; i < FarmCheck.Icons.Length; i++) learned.Add((FarmCheck.Icons[i].name, FarmCheck.IconFeature(img, g, i / 5, i % 5)));
-                icons = learned; grid = g; SaveConfig();
+                icons = learned; grid = g; coreTab = FarmCheck.TabPrint(img, g); SaveConfig();
                 MessageBox.Show("Learned 10 core icons from the first two rows (top: Upgrade Core Ultimate to Low, bottom: Force Core Ultimate to Low).", "Farm Tracker");
             }
         }

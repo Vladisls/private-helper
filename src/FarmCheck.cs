@@ -120,6 +120,25 @@ namespace CAHelper
         static (int x, int y) SlotOrigin(Grid g, int r, int c) =>
             ((int)Math.Round(g.X + SlotInset * g.Scale + c * g.PitchX), (int)Math.Round(g.Y + r * g.PitchY));
 
+        // ---------- inventory tab ----------
+        /// Fingerprint of the tab strip above the grid (brightness in 64 columns x 3 rows). The highlighted
+        /// tab changes it, so the core tab can be told apart from the other tabs.
+        public static double[] TabPrint(Img img, Grid g)
+        {
+            const int C = 64, R = 3; var f = new double[C * R]; var n = new int[C * R];
+            double s = g.Scale, x0 = g.X, x1 = g.X + 8 * g.PitchX, y0 = g.Y - 58 * s, y1 = g.Y - 20 * s;
+            for (int y = (int)y0; y < (int)y1; y++)
+                for (int x = (int)x0; x < (int)x1; x += 2)
+                {
+                    int c = (int)((x - x0) / (x1 - x0) * C), r = (int)((y - y0) / (y1 - y0) * R);
+                    if (c < 0 || c >= C || r < 0 || r >= R) continue;
+                    f[r * C + c] += img.Lum(x, y); n[r * C + c]++;
+                }
+            for (int i = 0; i < f.Length; i++) f[i] = n[i] > 0 ? f[i] / n[i] : 0;
+            return f;
+        }
+        public const double TabMatchMax = 6.0;
+
         // ---------- icons ----------
         /// Colour mix of the icon (18 hue bins + 3 brightness bins). Position-independent, so a pixel of grid drift doesn't matter.
         public static double[] IconFeature(Img img, Grid g, int r, int c)

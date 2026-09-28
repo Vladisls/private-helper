@@ -210,6 +210,16 @@ static class T {
       var after = FarmCheck.BestRead(inv, gl, icons, no3.Concat(learned3).ToList()).slots;
       Check(s3.Count == null && learned3.Count == 1 && after.First(x => x.Item == "Upgrade Core (Ultimate)").Count == 3 && after.First(x => x.Item == "Force Core (Highest)").Count == 34,
             "typing a count teaches an unknown digit (3 hidden, then learned: 3 and 34 read again)");
+      var ft = System.IO.Path.Combine(dataDir, "tab1.bin");
+      if (System.IO.File.Exists(ft)) {
+        var t1 = Load(ft);
+        var gt = FarmCheck.FindGrid(t1, 1415, 245, 615, 385, 8, 5);
+        var coreTab = FarmCheck.TabPrint(inv, gi);
+        double same = FarmCheck.Dist(coreTab, FarmCheck.TabPrint(inv, new Grid{ X = gi.X + 1, Y = gi.Y + 1, PitchX = gi.PitchX, PitchY = gi.PitchY }));
+        double other = FarmCheck.Dist(coreTab, FarmCheck.TabPrint(t1, gt));
+        Console.WriteLine($"INFO tab strip: core tab vs itself (1 px shift) {same:0.0}, core tab vs tab I {other:0.0}, grid on tab-I shot {gt.X},{gt.Y} pitch {gt.PitchX:0.00}");
+        Check(same < FarmCheck.TabMatchMax && other > FarmCheck.TabMatchMax, "tab check: core tab (VI) matches itself, tab I does not");
+      }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
         var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459);

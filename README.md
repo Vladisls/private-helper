@@ -116,6 +116,9 @@ FARM TRACKER
   * open the core tab for about a second at the start (a yellow prompt asks for it) and at
     the end: the core stacks are read and the gains shown (and per hour after 5 minutes);
   * rare drops (Jewel, Slot Extender, Potion of Luck, Stone) are picked up from the loot feed.
+- The core tab is remembered automatically (the tab strip above the grid) on the first read
+  that finds your cores; other tabs are ignored. Reads that find fewer than half of your
+  cores are ignored too.
 - Cores are found by their icon wherever they sit (stacks of the same core are added up).
   If a core isn't found, the panel asks: at the start "You have none of these?", at the end
   "Used them all?". Yes counts it as 0; Read again retries (e.g. wrong tab).
