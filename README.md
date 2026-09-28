@@ -135,10 +135,13 @@ FARM TRACKER
   are saved, last 5 of each.
 - A count shown as unreadable:
   Areas & learning > Fix counts, type the real number once and the digit is learned.
+- The grid is pinned to two fixed parts of the inventory window that never animate: the sword
+  button under the slots (the grid is a fixed offset above it) and the close cross at the top
+  right (their distance checks the scale). No twitching between reads.
 - The inventory doesn't have to be where the area says: while waiting for core counts the
-  tracker looks at all monitors every 3 s. It reads the screen text for the window title
-  "Inventory" and searches the slot grid just below it (slot size from the title's text size);
-  if no title is read, it searches the grid pattern on the whole picture. The area moves to the
+  tracker looks at all monitors every 3 s. It first looks for the sword button; failing that it
+  reads the screen text for the window title "Inventory" and searches the slot grid just below
+  it; failing that it searches the grid pattern on the whole picture. The area moves to the
   inventory it finds. Nothing is guessed from the desktop resolution, so the game can run at
   another size than the desktop or on another monitor.
 - The slot size is learned from the first read that recognises your cores and saved
