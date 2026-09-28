@@ -39,6 +39,9 @@ namespace CAHelper
         /// Real screen height in pixels, even with Windows display scaling on.
         public static int PhysicalScreenHeight() { using (new DpiAware()) return GetSystemMetrics(1); }
         public static int PhysicalScreenWidth() { using (new DpiAware()) return GetSystemMetrics(0); }
+        /// All monitors together, in real pixels (can start at negative coordinates).
+        public static Rectangle PhysicalVirtualScreen()
+        { using (new DpiAware()) return new Rectangle(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79)); }
 
         public static Bitmap Capture(Rectangle area)
         {

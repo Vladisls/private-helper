@@ -35,7 +35,8 @@ namespace CAHelper
             try { File.WriteAllLines(DebugPath, debug); } catch { }
         }
 
-        double ExpectedPitch => FarmCheck.RefPitch * PartyOcr.PhysicalScreenHeight() / 1440.0;
+        double? expectedPitchOverride;                                           // slot size of the inventory found on screen
+        double ExpectedPitch => expectedPitchOverride ?? FarmCheck.RefPitch * PartyOcr.PhysicalScreenHeight() / 1440.0;
 
         // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
         Rectangle invArea = new Rectangle(1905, 240, 620, 615), endArea = new Rectangle(209, 284, 630, 745), lootArea = new Rectangle(2105, 1195, 395, 160);
@@ -160,7 +161,8 @@ namespace CAHelper
         // ---------- session ----------
         void StartSession()
         {
-            Debug("session started"); running = true; started = DateTime.Now; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
+            Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}, expected slot {ExpectedPitch:0.0} px)");
+            running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
             confirmedEmpty.Clear(); pending = null;
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
@@ -255,13 +257,23 @@ namespace CAHelper
         {
             if ((now - lastLocate).TotalSeconds < 3) return;
             lastLocate = now;
-            var screen = new Rectangle(0, 0, PartyOcr.PhysicalScreenWidth(), PartyOcr.PhysicalScreenHeight());
+            var screen = PartyOcr.PhysicalVirtualScreen();                        // every monitor
             using (var bmp = PartyOcr.Capture(screen))
             {
-                var found = FarmCheck.LocateInventory(PartyOcr.ToImg(bmp), ExpectedPitch);
-                if (found == null) { Debug("searched the whole screen: no inventory grid visible", "locate-none"); return; }
+                var img = PartyOcr.ToImg(bmp);
+                // Slot size from the desktop resolution and from a 2560x1440 game; keep the stronger grid.
+                Grid? found = null; double bestWeak = 0;
+                foreach (var p in new[] { ExpectedPitch, FarmCheck.RefPitch }.Distinct())
+                {
+                    var g1 = FarmCheck.LocateInventory(img, p);
+                    if (g1 == null) continue;
+                    double w = FarmCheck.WeakestLine(img, g1.Value);
+                    if (w > bestWeak) { bestWeak = w; found = g1; }
+                }
+                if (found == null) { Debug($"searched all screens ({screen.Width}x{screen.Height}): no inventory grid visible", "locate-none"); return; }
                 var g = found.Value; int m = (int)Math.Round(g.PitchX * 0.2);
-                invArea = new Rectangle((int)g.X - m, (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
+                invArea = new Rectangle(screen.X + (int)g.X - m, screen.Y + (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
+                expectedPitchOverride = g.PitchX;
                 grid = null; lastInvRead = DateTime.MinValue; SaveConfig();
                 Debug($"found the inventory elsewhere on screen: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}");
             }
@@ -281,6 +293,8 @@ namespace CAHelper
                 if (grid == null)
                 {
                     var g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, ExpectedPitch);
+                    if (!FarmCheck.InventoryOpen(img, g0) && Math.Abs(ExpectedPitch - FarmCheck.RefPitch) > 3)
+                        g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, FarmCheck.RefPitch);   // game at 2560x1440 on another desktop size
                     if (!FarmCheck.InventoryOpen(img, g0))
                     {
                         invOpenSince = DateTime.MinValue; Debug($"inventory not open in its area (grid contrast {g0.Score:0.00}, needs 1.70)", "closed");
