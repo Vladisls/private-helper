@@ -433,6 +433,12 @@ static class T {
     var endC = new Dictionary<string,int>{ ["UC High"]=156, ["FC Low"]=1, ["UC Low"]=0 };
     var gains = FarmCheck.Gains(baseL, endC);
     Check(gains["UC High"]==12 && gains["FC Low"]==1 && gains["UC Low"]==-9, "gains: new core from 0 counts +1, used-up stack counts -9");
+    { var smc = new FarmCheck.CountSmoother();
+      foreach (var v in new[]{ 158, 158, 158 }) smc.Add(new Dictionary<string,int>{ ["FC High"]=v });
+      smc.Add(new Dictionary<string,int>{ ["FC High"]=170 }, new HashSet<string>{ "FC High" });
+      Check(smc.Stable()["FC High"]==170, "a count both readers agreed on shows at once");
+      smc.Add(new Dictionary<string,int>{ ["FC High"]=70 });
+      Check(smc.Stable()["FC High"]==170, "an unconfirmed truncated read doesn't override it"); }
     var sm = new FarmCheck.CountSmoother();
     foreach (var v in new[]{ 158, 58, 158, 158, 58 }) sm.Add(new Dictionary<string,int>{ ["FC High"]=v, ["FC Med"]=16 });
     Check(sm.Stable()["FC High"]==158 && sm.Stable()["FC Med"]==16, "smoother: 158 wins over an occasional 58");

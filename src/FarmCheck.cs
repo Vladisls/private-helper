@@ -903,12 +903,14 @@ namespace CAHelper
 
             public void Clear() { recent.Clear(); missingStreak.Clear(); everSeen.Clear(); }
 
-            /// Feed one read (name -> count for the cores found in it).
-            public void Add(IDictionary<string, int> read)
+            /// Feed one read (name -> count for the cores found in it). Counts in `confident` (both readers agreed)
+            /// replace that core's history, so they show at once; other values still need the recent majority.
+            public void Add(IDictionary<string, int> read, ICollection<string> confident = null)
             {
                 foreach (var kv in read)
                 {
                     if (!recent.TryGetValue(kv.Key, out var l)) recent[kv.Key] = l = new List<int>();
+                    if (confident != null && confident.Contains(kv.Key)) l.Clear();
                     l.Add(kv.Value); if (l.Count > Window) l.RemoveAt(0);
                     missingStreak[kv.Key] = 0; everSeen.Add(kv.Key);
                 }

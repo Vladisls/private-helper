@@ -523,7 +523,7 @@ namespace CAHelper
                     Debug($"grid {(hadGrid ? "found again" : "found")} at {g0.X:0},{g0.Y:0} in the capture ({locatedBy}), slot {g0.PitchX:0.0}x{g0.PitchY:0.0} px, contrast {g0.Score:0.00}");
                 }
                 if (invOpenSince == DateTime.MinValue) invOpenSince = now;
-                if ((now - invOpenSince).TotalSeconds < 0.5 || (now - lastInvRead).TotalSeconds < 1) return;   // open for 0.5 s, read once a second
+                if ((now - invOpenSince).TotalSeconds < 0.25 || (now - lastInvRead).TotalSeconds < 0.5) return;   // open for 0.25 s, read twice a second
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
                 double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
@@ -602,7 +602,7 @@ namespace CAHelper
                             int? o = ocr != null && i < ocr.Length ? ocr[i] : null, sh = slotsNow[i].Count;
                             if (o.HasValue && sh.HasValue)
                             {
-                                if (o == sh) agree++;
+                                if (o == sh) { agree++; slotsNow[i].Cells.Add("agree"); }
                                 else { differ++; disagreements.Add($"{Short(slotsNow[i].Item)} reader {o} / shapes {sh}"); }
                             }
                             // Merge: the text reader wins, except that a value which is the tail of the other one is a
@@ -628,13 +628,18 @@ namespace CAHelper
                             try { frameNow.Save(Path.Combine(Dir, $"cabal-helper-farm-frame-{stripSaves}.png"), System.Drawing.Imaging.ImageFormat.Png); } catch { }
                             Debug($"count strip saved as cabal-helper-farm-digits-{stripSaves}.png ({(differ > 0 ? "readers disagree" : "a count changed")}): " + string.Join(", ", slotsNow.Select(x => Short(x.Item) + "=" + (x.Count?.ToString() ?? "?"))));
                         }
-                        var counts = new Dictionary<string, int>();
-                        foreach (var sl in slotsNow) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
+                        var counts = new Dictionary<string, int>(); var confident = new HashSet<string>();
+                        foreach (var sl in slotsNow)
+                        {
+                            if (!sl.Count.HasValue) continue;
+                            counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
+                        }
+                        // a core is confident only if every stack of it was agreed by both readers
+                        foreach (var name in counts.Keys) if (slotsNow.Where(x => x.Item == name).All(x => x.Cells.Contains("agree"))) confident.Add(name); else confident.Remove(name);
                         if (slotsNow.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
-                        smoother.Add(counts); readsSinceStart++;
+                        smoother.Add(counts, confident); readsSinceStart++;
                         var stable = smoother.Stable();
-                        // Take a decision only once the smoother has a few reads; missing cores need MissingAfter absent reads.
-                        if (readsSinceStart >= 2 || baseline != null) ApplyRead(stable, smoother.Gone());
+                        ApplyRead(stable, smoother.Gone());
                         ovSlots = slotsNow; Render();
                     }
                     finally { busyInv = false; frameNow.Dispose(); }
