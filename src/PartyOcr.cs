@@ -224,6 +224,27 @@ namespace CAHelper
         }
 
         public const int DigitEnlarge = 3, DigitGap = 6;
+        /// What the last count read looked like (for diagnostics): the enlarged strip, the cleaned strip, the words.
+        public static Bitmap LastStrip, LastClean; public static List<OcrWord> LastWords = new List<OcrWord>();
+
+        /// Saves the last strip (raw | cleaned, with the reader's words drawn on) for diagnostics.
+        public static void SaveLastStrip(string path)
+        {
+            if (LastStrip == null || LastClean == null) return;
+            using (var bmp = new Bitmap(LastStrip.Width + LastClean.Width + 10, Math.Max(LastStrip.Height, LastClean.Height), PixelFormat.Format32bppArgb))
+            using (var g = Graphics.FromImage(bmp))
+            using (var f = new Font("Segoe UI", 9f, FontStyle.Bold))
+            {
+                g.Clear(Color.Magenta);
+                g.DrawImageUnscaled(LastStrip, 0, 0); g.DrawImageUnscaled(LastClean, LastStrip.Width + 10, 0);
+                foreach (var w in LastWords)
+                {
+                    var r = new Rectangle(LastStrip.Width + 10 + (int)w.X, (int)w.Y, (int)w.W, (int)w.H);
+                    g.DrawRectangle(Pens.Red, r); g.DrawString(w.Text, f, Brushes.Red, r.Right + 2, r.Top);
+                }
+                bmp.Save(path, ImageFormat.Png);
+            }
+        }
 
         /// Reads the stack counts of several slots with the text reader in one call: the digit bands are cut out,
         /// cleaned to dark digits on light, enlarged and stacked into one strip. null entries = unreadable.
@@ -245,8 +266,10 @@ namespace CAHelper
                 using (var big = Enlarge(strip, DigitEnlarge))
                 using (var clean = Clean(big, 150, 245, 1.5))
                 {
+                    LastStrip?.Dispose(); LastStrip = (Bitmap)big.Clone(); LastClean?.Dispose(); LastClean = (Bitmap)clean.Clone();
                     var lines = await ReadWordsAsync(clean, 1);
                     var words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l);
+                    LastWords = words;
                     return FarmCheck.MapStripWords(words, bands.Count, bh, DigitGap, DigitEnlarge);
                 }
             }

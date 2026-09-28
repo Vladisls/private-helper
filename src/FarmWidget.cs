@@ -66,7 +66,7 @@ namespace CAHelper
         Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
-        bool busyEnd, busyLoot, busyInv;
+        bool busyEnd, busyLoot, busyInv; int stripSaves;
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
         readonly FarmCheck.CountSmoother smoother = new FarmCheck.CountSmoother();
@@ -150,6 +150,7 @@ namespace CAHelper
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Open farm log", null, (s, e) => Files.OpenInTextEditor(LogPath));
             m.Items.Add("Diagnostics: what the tracker decided", null, (s, e) => Files.OpenInTextEditor(DebugPath));
+            m.Items.Add("Diagnostics: last count strip (picture)", null, (s, e) => { var pth = Path.Combine(Dir, "cabal-helper-farm-digits-last.png"); PartyOcr.SaveLastStrip(pth); if (File.Exists(pth)) Files.OpenFolder(pth); else MessageBox.Show("No count read yet.", "Farm Tracker"); });
             m.Items.Add("Diagnostics: last inventory read (picture)", null, (s, e) => { if (File.Exists(InvShotPath)) Files.OpenFolder(InvShotPath); else MessageBox.Show("No inventory read yet.", "Farm Tracker"); });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Reset areas and everything learned…", null, (s, e) => ResetAll());
@@ -499,14 +500,29 @@ namespace CAHelper
                     finally { copy.Dispose(); }
                     try
                     {
-                        int agree = 0, differ = 0;
+                        int agree = 0, differ = 0; var disagreements = new List<string>();
                         for (int i = 0; i < slotsNow.Count; i++)
                         {
-                            int? o = ocr != null && i < ocr.Length ? ocr[i] : null;
-                            if (o.HasValue && slotsNow[i].Count.HasValue) { if (o == slotsNow[i].Count) agree++; else differ++; }
-                            if (o.HasValue) { slotsNow[i].Count = o; slotsNow[i].Cells.Add("ocr"); }
+                            int? o = ocr != null && i < ocr.Length ? ocr[i] : null, sh = slotsNow[i].Count;
+                            if (o.HasValue && sh.HasValue)
+                            {
+                                if (o == sh) agree++;
+                                else { differ++; disagreements.Add($"{Short(slotsNow[i].Item)} reader {o} / shapes {sh}"); }
+                            }
+                            // Merge: the text reader wins, except that a value which is the tail of the other one is a
+                            // truncated read (a leading digit lost), so the longer value wins.
+                            int? merged = o ?? sh;
+                            if (o.HasValue && sh.HasValue && o != sh)
+                            {
+                                string so = o.Value.ToString(), ss = sh.Value.ToString();
+                                if (ss.EndsWith(so) && ss.Length > so.Length) merged = sh;
+                                else if (so.EndsWith(ss) && so.Length > ss.Length) merged = o;
+                            }
+                            if (merged.HasValue) { slotsNow[i].Count = merged; if (o.HasValue) slotsNow[i].Cells.Add("ocr"); }
                         }
-                        if (ocr != null) Debug($"counts by text reader: {ocr.Count(v => v.HasValue)}/{slotsNow.Count} read, {agree} agree with shapes, {differ} differ", "ocr:" + agree + "/" + differ);
+                        if (ocr != null) Debug($"counts by text reader: {ocr.Count(v => v.HasValue)}/{slotsNow.Count} read, {agree} agree with shapes, {differ} differ" + (differ > 0 ? ": " + string.Join("; ", disagreements) : ""), "ocr:" + agree + "/" + differ + string.Join("", disagreements));
+                        // Keep the strips of reads where the two readers disagree, for diagnostics (last 5).
+                        if (differ > 0) { stripSaves = (stripSaves + 1) % 5; PartyOcr.SaveLastStrip(Path.Combine(Dir, $"cabal-helper-farm-digits-{stripSaves}.png")); }
                         var counts = new Dictionary<string, int>();
                         foreach (var sl in slotsNow) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                         if (slotsNow.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
