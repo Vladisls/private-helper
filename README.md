@@ -5,6 +5,7 @@ Small always-on-top helpers that float over Cabal (PlayCabal), for Windows 10/11
 - **CA Runner**: timer for the two-channel Chaos Arena trick. Flashes the screen when the 2nd boss is up and you are not looking.
 - **Daily To-do**: daily/weekly checklist with + / - counters, filtered by your CP, most valuable first, with a "why" tooltip per task.
 - **Alarms**: your own alarms (title + time + days), with a warning before. E.g. GDG every day at 19:30.
+- **Farm Tracker**: counts runs, run times and DP from the dungeon end window, core gains from your inventory, and rare drops from the loot feed.
 - **Party Check**: reads the party member names from the screen. Fix the party once, press Validate after each re-form to spot snipers.
 
 It never reads, hooks or sends anything to the game.
@@ -105,6 +106,25 @@ ALARMS
 - Server time offset (Settings): server clock minus your PC clock. Default -1:00, because the
   server shows 18:30 when an Estonian PC shows 19:30. Check it again when clocks change for
   summer/winter time if the server doesn't follow the same change.
+
+FARM TRACKER
+- Put your cores on the last inventory tab with autosort off (top row Upgrade Cores
+  Ultimate -> Low, bottom row Force Cores Ultimate -> Low). The default areas fit a
+  2560x1440 screen; on another resolution use "Areas & learning" to set them.
+- Start session, then play as usual:
+  * every "Quest Dungeon Cleared!" window counts a run, with its time, dungeon and DP;
+  * open the core tab for about a second at the start and at the end: the core stacks are
+    read and the gains shown (and per hour after 5 minutes);
+  * rare drops (Jewel, Slot Extender, Potion of Luck, Stone) are picked up from the loot feed.
+- Stop session writes everything to cabal-helper-farm-log.csv next to the exe.
+- A count shown as unreadable (e.g. a 7, which wasn't in the sample screenshot):
+  Areas & learning > Fix counts, type the real number once and the digit is learned.
+- After moving the inventory or changing resolution: set the inventory area again and
+  "Learn core icons from the open inventory".
+- While a session runs it checks three small screen areas once a second; reading text
+  only happens when something changed, so the CPU cost is tiny. It never touches the game.
+- Loot-feed counting is best effort: identical lines in a row can't be told apart and a big
+  chest can scroll past, which is why cores are counted from the inventory instead.
 
 PARTY CHECK (GDG party re-forms)
 - Area & roster > Set area: drag a box around the member list, including the

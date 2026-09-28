@@ -4,3 +4,4 @@ dist/
 *.zip
 *.user
 .DS_Store
+test/data/

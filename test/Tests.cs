@@ -184,6 +184,50 @@ static class T {
     var badRead = new PartyRead{ Names = new List<string>{ "Re","nitiel","EConzine","VD","axW1","Doern","FGButherl","GOOF","rxBirdTreeCircle","Melantha" }, Count=10 };
     Check(PartyCheck.BestForValidate(roster, new[]{ badRead, now1 }) == now1, "Validate picks the read that agrees with the roster");
 
+    // ---- Farm Tracker (real 2026-09-28 screenshots; skipped if test/data is missing) ----
+    Img Load(string f) { var b = System.IO.File.ReadAllBytes(f); int w = BitConverter.ToInt32(b, 0), h = BitConverter.ToInt32(b, 4); var px = new byte[b.Length - 8]; Buffer.BlockCopy(b, 8, px, 0, px.Length); return new Img(w, h, px); }
+    Img Crop(Img im, int x, int y, int w, int h) { var px = new byte[w*h*4]; for (int r = 0; r < h; r++) Buffer.BlockCopy(im.Px, ((y+r)*im.W + x)*4, px, r*w*4, w*4); return new Img(w, h, px); }
+    string dataDir = System.IO.Path.Combine(AppContext.BaseDirectory, "../../../data");
+    if (System.IO.File.Exists(System.IO.Path.Combine(dataDir, "inv.bin"))) {
+      var inv = Load(System.IO.Path.Combine(dataDir, "inv.bin"));
+      var end = Load(System.IO.Path.Combine(dataDir, "end.bin"));
+      var tmr = Load(System.IO.Path.Combine(dataDir, "timer.bin"));
+      var icons = FarmCheck.Icons.ToList(); var digs = FarmCheck.Digits.ToList();
+      string expect = "Upgrade Core (Ultimate)=3,Upgrade Core (Highest)=208,Upgrade Core (High)=144,Upgrade Core (Medium)=14,Upgrade Core (Low)=9,Force Core (Ultimate)=5,Force Core (Highest)=34,Force Core (High)=158,Force Core (Medium)=16,Force Core (Low)=2";
+      foreach (var (bx,by,bw,bh) in new[]{ (1912,248,612,612), (1905,240,620,615), (1918,255,608,608), (1900,245,616,612) }) {
+        var g = FarmCheck.FindGrid(inv, bx, by, bw, bh);
+        var got = string.Join(",", FarmCheck.BestRead(inv, g, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
+        Check(got == expect, $"inventory read from a rough box {bx},{by}: grid {g.X},{g.Y} pitch {g.PitchX:0.00} -> {got}");
+      }
+      var gi = FarmCheck.FindGrid(inv, 1912, 248, 612, 612);
+      Check(FarmCheck.InventoryOpen(inv, gi) && !FarmCheck.InventoryOpen(end, gi) && !FarmCheck.InventoryOpen(tmr, gi), "inventory-open check: yes on the inventory shot, no on the others");
+      Check(FarmCheck.EndWindowLikely(Crop(end, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(tmr, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(inv, 209, 284, 630, 745)),
+            "end-window trigger: yes on the end window, no in dungeon or with inventory");
+      var no3 = digs.Where(d => d.d != '3').ToList();
+      var (gl, before) = FarmCheck.BestRead(inv, gi, icons, no3);
+      var s3 = before.First(x => x.Item == "Upgrade Core (Ultimate)");
+      var learned3 = FarmCheck.LearnDigits(inv, gl, s3.Row, s3.Col, 3, no3);
+      var after = FarmCheck.BestRead(inv, gl, icons, no3.Concat(learned3).ToList()).slots;
+      Check(s3.Count == null && learned3.Count == 1 && after.First(x => x.Item == "Upgrade Core (Ultimate)").Count == 3 && after.First(x => x.Item == "Force Core (Highest)").Count == 34,
+            "typing a count teaches an unknown digit (3 hidden, then learned: 3 and 34 read again)");
+      var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
+      if (System.IO.File.Exists(f1080)) {
+        var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459);
+        var got2 = string.Join(",", FarmCheck.BestRead(small, g2, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
+        Console.WriteLine($"INFO 1920x1080 (resized screenshot): grid pitch {g2.PitchX:0.00} -> {got2}");
+      }
+    } else Console.WriteLine("SKIP farm screenshot tests (no test/data)");
+    var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
+    var rr = FarmCheck.ParseEndWindow(endLines);
+    Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");
+    var merged = FarmCheck.ParseEndWindow(new List<string>{ "Dungeon", "Frozen Clue (Awakened)", "Quest Dungeon Cleared! Time :1 min(s) 5 sec(s)", "Dungeon Point Gained: 5" });
+    Check(merged != null && merged.Seconds==65 && merged.Dungeon=="Frozen Clue (Awakened)", "end window parsed when the reader merges lines");
+    Check(FarmCheck.ParseEndWindow(new List<string>{ "Dungeon", "Enter Guild Dungeon 6" }) == null, "other windows are ignored");
+    var p1 = new List<string>{ "Obtain Upgrade Core Set (High) x 1", "Obtain Upgrade Core Set (Highest) x 1", "Obtain Faded Orange Jewel x 1" };
+    var p2 = new List<string>{ "Obtain Upgrade Core Set (Highest) x 1", "Obtain Faded Orange Jewel x 1", "Obtain Fire Stone x 1", "Obtain Slot Extender (High) x 1" };
+    Check(string.Join("|", FarmCheck.NewLines(p1, p2))=="Obtain Fire Stone x 1|Obtain Slot Extender (High) x 1", "loot feed: only lines added since last read");
+    Check(FarmCheck.ParseLoot("Obtain Faded Orange Jewel x 2")?.item=="Faded Orange Jewel" && FarmCheck.ParseLoot("Obtain Faded Orange Jewel x 2")?.qty==2, "loot line parsed");
+
     // ---- Updater ----
     string sha = new string('a', 64);
     Check(Updater.TryParseInfo("2.1.0\r\n"+sha+"\r\n", out var v1, out var h1) && v1==new Version(2,1,0) && h1==sha, "version.txt parses (CRLF ok)");

@@ -1,0 +1,327 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Text.RegularExpressions;
+
+namespace CAHelper
+{
+    /// Raw screen pixels, BGRA like System.Drawing's 32bpp format (so tests can feed screenshots on any OS).
+    public sealed class Img
+    {
+        public readonly int W, H; public readonly byte[] Px;   // B,G,R,A per pixel
+        public Img(int w, int h, byte[] px) { W = w; H = h; Px = px; }
+        public void Rgb(int x, int y, out int r, out int g, out int b)
+        {
+            if (x < 0 || y < 0 || x >= W || y >= H) { r = g = b = 0; return; }
+            int i = (y * W + x) * 4; b = Px[i]; g = Px[i + 1]; r = Px[i + 2];
+        }
+        public double Lum(int x, int y) { Rgb(x, y, out int r, out int g, out int b); return (r + g + b) / 3.0; }
+    }
+
+    public struct Grid { public double X, Y, PitchX, PitchY, Score; public double Scale => PitchX / FarmCheck.RefPitch; }
+
+    public sealed class SlotRead { public int Row, Col; public string Item; public double IconDist; public int? Count; public List<string> Cells = new List<string>(); }
+
+    /// Pixel logic for the Farm Tracker: inventory grid, core icons, stack digits, end-window trigger, loot-feed diff.
+    /// Numbers were tuned on real 2560x1440 screenshots; other resolutions scale by the detected slot size.
+    public static class FarmCheck
+    {
+        public const double RefPitch = 76.75;
+        public const int CW = 11, CH = 17, DigitRight = 69, DigitTop = 46, SlotInset = 8;
+
+        // digit cells (11x17) sampled from a 2560x1440 screenshot, 2026-09-28
+        public static readonly (char d, string cell)[] Digits = {
+            ('3', "..............#####.....#######..........##.........##.........##........##.......###.......####..........##..........##.........##.........##.........##..#.....##...########....#####...."),
+            ('_', ".....................................................................................................................................#..........#..........#..............................."),
+            ('8', "..............###......#######....#.....##..##.....##..##.....##..###....#....###..##.....#####.....##..###....#.....##..##......##.##......##.##......##..##....##...#######......####...."),
+            ('0', ".............####......######....##....##...#...#..#...#...##.#...#......##..#......##..#......##..#......##..#......##..#......##..#......##..#......#...##....##....######......####....."),
+            ('2', ".............###........#####.........##..........##.........##..#......##..#......#...#.....##...#....##....#....#.....##.###..##.#..##....#.#.##........##.........########...########..."),
+            ('_', ".............................................................................................................................#######...............#...........................#..........#"),
+            ('4', "..................##........###.......####.......#.##......#..##.....##..##....##...##...##....##...#.....##...#########..#########........##.........##.........##.........##.........##.."),
+            ('4', "...............#..##........###.......####.......#.##......#..##.....##..##....##...##...##....##...#.....##...#########...########........##.........##.........##.........##.........##.."),
+            ('1', "................##.........##......#####......#####.........##.........##.........##.........##.........##.........##.......#.##.......#.##.#..#..#.##.........##...#.....##......#######.."),
+            ('_', "...............................................................................................................................................#.#.............#..........................."),
+            ('4', "..................##........###.......####.......#.##......#..##.....##..##....##...##...##....##...#.....##...#########..#########........##.........##.........##.........##.........##.."),
+            ('1', "................##.........##......#####......#####.........##.........##.........##.........##.........##.........##.........##.........##.........##.......#.##.........##......#######.."),
+            ('_', "..........................................................................................................................................................................................."),
+            ('9', "..............####......######....##....##..##......#..##......##.##......##.##......##..##.....##..#########....####.##.........#..........#.........##........##....######.....####......"),
+            ('_', "...............................................#..........#..........#..........#..........#..............................................................................................."),
+            ('5', ".............########...########...##.........##.........##.........##.........#####......#######.........##..........##.........##.........##.........##........##....#######.....####...."),
+            ('_', ".................................#........................................................#..........##.........#.........#................................................................"),
+            ('4', "..................##........###.......####......##.##......#..##.....##..##....##...##...##....##...#.....##...#########..#########........##.........##.........##.........##.........##.."),
+            ('3', "..............#####....########...#......##.........##.........##........##.......###.......####..........##....#.....##..#......##.........##.........##..#.....##...########.....####...."),
+            ('_', "........................................####.........##...........................#........................................................................................................"),
+            ('8', "..............###......#######....#.....##..##.....##..##.....##..###....#....###..##.....#####.....##..###....#.....##..##......##.##......##.##......##..##....##...#######......####...."),
+            ('5', "............########...########...##.........##.........##.........##.........#####......#######.........##..........##.........##.........##.........##........##....#######.....####....."),
+            ('1', "........#......##..#......##..#...##.##..###.##.##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##......#######..."),
+            ('_', "..............................................................................................................................................................#..###......................."),
+            ('6', "................###......######....##........##.........#..........#.........##.####....#########..##.....##..##......##.##......##.##......##..#......##..##....##....######......####...."),
+            ('1', "...............##.........##......#####......#####.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##......#######..."),
+            ('_', "...............................#..........##..............###.....##.###..................................................................................................................."),
+            ('2', "..............####.....########.........##..........##.........##.........##.........#.........##........##........###........##........##........##........##........#########..#########."),
+            ('_', "..............#...............................#...........#...........#.................#.................................................................................................."),
+        };
+        // core icon colour histograms from the same screenshot (top row Upgrade Cores, bottom row Force Cores)
+        public static readonly (string name, double[] f)[] Icons = {
+            ("Upgrade Core (Ultimate)", new[] { 0.00, 0.00, 0.09, 7.50, 21.55, 6.09, 0.36, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 39.68, 8.18, 16.55 }),
+            ("Upgrade Core (Highest)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.14, 3.91, 27.27, 8.27, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 36.05, 7.05, 17.32 }),
+            ("Upgrade Core (High)", new[] { 11.95, 0.91, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.14, 12.50, 58.77, 14.45, 1.27 }),
+            ("Upgrade Core (Medium)", new[] { 2.23, 23.36, 1.50, 0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 52.68, 19.41, 0.77 }),
+            ("Upgrade Core (Low)", new[] { 0.05, 3.32, 19.14, 0.32, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 56.68, 19.50, 1.00 }),
+            ("Force Core (Ultimate)", new[] { 0.00, 0.00, 0.00, 2.36, 5.59, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 46.32, 13.14, 32.59 }),
+            ("Force Core (Highest)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.55, 3.09, 10.45, 3.32, 0.00, 0.00, 0.00, 0.00, 0.00, 44.36, 12.55, 25.68 }),
+            ("Force Core (High)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.14, 25.95, 5.18, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 46.18, 14.95, 7.59 }),
+            ("Force Core (Medium)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 2.23, 13.86, 0.32, 0.00, 0.00, 0.00, 52.91, 21.77, 8.91 }),
+            ("Force Core (Low)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 3.18, 13.41, 0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 56.00, 19.55, 7.82 }),
+        };
+        public static readonly double[] EmptySlot = { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 100.00, 0.00, 0.00 };
+
+        // ---------- inventory grid ----------
+        /// Snaps a rough user box to the slot grid: border lines are brighter than slot interiors.
+        public static Grid FindGrid(Img img, int bx, int by, int bw, int bh, int cols = 8, int rows = 8)
+        {
+            (int off, double pitch, double score) Axis(bool horiz)
+            {
+                int n = horiz ? cols : rows; double best = -1; int bo = 0; double bp = RefPitch;
+                double guess = (horiz ? bw : bh) / (double)n;
+                for (double p = guess * 0.93; p <= guess * 1.07; p += 0.25)
+                    for (int o = -14; o <= 14; o++)
+                    {
+                        double s = 0;
+                        for (int k = 0; k <= n; k++)
+                        {
+                            int pos = (horiz ? bx : by) + o + (int)Math.Round(k * p);
+                            for (int t = 0; t < (horiz ? bh : bw); t += 3) s += horiz ? img.Lum(pos, by + t) : img.Lum(bx + t, pos);
+                        }
+                        if (s > best) { best = s; bo = o; bp = p; }
+                    }
+                return (bo, bp, best);
+            }
+            var h = Axis(true); var v = Axis(false);
+            var g = new Grid { X = bx + h.off, Y = by + v.off, PitchX = h.pitch, PitchY = v.pitch };
+            g.Score = BorderContrast(img, g, cols, rows);
+            return g;
+        }
+
+        /// Brightness on border lines vs just inside the slots. Inventory open ~2.2, anything else ~1.3.
+        public static double BorderContrast(Img img, Grid g, int cols = 8, int rows = 8)
+        {
+            double on = 0, inside = 0; int inset = (int)Math.Round(6 * g.Scale);
+            for (int k = 0; k <= cols; k++)
+            {
+                int x = (int)Math.Round(g.X + k * g.PitchX);
+                for (int y = (int)g.Y; y < g.Y + rows * g.PitchY; y += 2) { on += img.Lum(x, y); if (k < cols) inside += img.Lum(x + inset, y); }
+            }
+            return on / Math.Max(1, inside);
+        }
+        public static bool InventoryOpen(Img img, Grid g) => BorderContrast(img, g) > 1.7;
+
+        static (int x, int y) SlotOrigin(Grid g, int r, int c) =>
+            ((int)Math.Round(g.X + SlotInset * g.Scale + c * g.PitchX), (int)Math.Round(g.Y + r * g.PitchY));
+
+        // ---------- icons ----------
+        /// Colour mix of the icon (18 hue bins + 3 brightness bins). Position-independent, so a pixel of grid drift doesn't matter.
+        public static double[] IconFeature(Img img, Grid g, int r, int c)
+        {
+            var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;
+            var h = new double[21]; double n = 0;
+            for (int y = 0; y < 44; y++)
+                for (int x = 0; x < 50; x++)
+                {
+                    img.Rgb(sx + (int)Math.Round((4 + x) * s), sy + (int)Math.Round((2 + y) * s), out int R, out int G, out int B);
+                    double rr = R / 255.0, gg = G / 255.0, bb = B / 255.0, mx = Math.Max(rr, Math.Max(gg, bb)), mn = Math.Min(rr, Math.Min(gg, bb)), d = mx - mn;
+                    n++;
+                    if (d > 0.18 && mx > 0.25)
+                    {
+                        double hue = mx == rr ? ((gg - bb) / d) % 6 : mx == gg ? (bb - rr) / d + 2 : (rr - gg) / d + 4;
+                        hue = (hue < 0 ? hue + 6 : hue) / 6;
+                        h[Math.Min(17, (int)(hue * 18))]++;
+                    }
+                    else h[18 + Math.Min(2, (int)(mx * 3))]++;
+                }
+            for (int i = 0; i < 21; i++) h[i] = h[i] / n * 100;
+            return h;
+        }
+        public static double Dist(double[] a, double[] b) { double s = 0; for (int i = 0; i < a.Length; i++) s += Math.Abs(a[i] - b[i]); return s / a.Length; }
+
+        // ---------- digits ----------
+        static bool White(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b)); return mn >= 165 && mx - mn < 70; }
+        static bool Dark(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); return Math.Max(r, Math.Max(g, b)) < 70; }
+        /// White pixel with a dark outline next to it: stack digits have one, icon glows don't.
+        static bool DigitPx(Img img, int x, int y)
+        {
+            if (!White(img, x, y)) return false;
+            for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) if (Dark(img, x + dx, y + dy)) return true;
+            return false;
+        }
+        public static string Cell(Img img, Grid g, int r, int c, int i)
+        {
+            var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;
+            var chars = new char[CW * CH];
+            for (int y = 0; y < CH; y++)
+                for (int x = 0; x < CW; x++)
+                {
+                    int px = sx + (int)Math.Round((DigitRight - (i + 1) * CW + x) * s), py = sy + (int)Math.Round((DigitTop + y) * s);
+                    chars[y * CW + x] = DigitPx(img, px, py) ? '#' : '.';
+                }
+            return new string(chars);
+        }
+        /// Hamming distance allowing up to 2 px of shift.
+        public static int CellDist(string a, string b)
+        {
+            int best = int.MaxValue;
+            for (int dy = -2; dy <= 2; dy++)
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int d = 0;
+                    for (int y = 0; y < CH; y++)
+                        for (int x = 0; x < CW; x++)
+                        {
+                            int sx = x - dx, sy = y - dy;
+                            char ca = sx >= 0 && sy >= 0 && sx < CW && sy < CH ? a[sy * CW + sx] : '.';
+                            if (ca != b[y * CW + x]) d++;
+                        }
+                    if (d < best) best = d;
+                }
+            return best;
+        }
+        public const int DigitMatchMax = 21;   // same digit <= 16, closest different digits 26 on the test screenshot
+
+        /// Reads a stack count right to left. null = a glyph wasn't recognised (e.g. a 7 before it has been learned).
+        public static int? ReadCount(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, List<string> cellsOut)
+        {
+            var digits = new List<char>();
+            for (int i = 0; i < 5; i++)
+            {
+                string cell = Cell(img, g, r, c, i);
+                if (cell.Count(ch => ch == '#') < 6) break;                       // nothing here: number ended
+                var best = templates.Select(t => (t.d, dist: CellDist(cell, t.cell))).OrderBy(t => t.dist).First();
+                if (best.dist > DigitMatchMax) { cellsOut?.Add(cell); return null; }
+                if (best.d == '_') break;
+                cellsOut?.Add(cell);
+                digits.Insert(0, best.d);
+            }
+            if (digits.Count == 0) return 1;                                      // single item: no number shown
+            return int.Parse(new string(digits.ToArray()), CultureInfo.InvariantCulture);
+        }
+
+        public static List<SlotRead> ReadInventory(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, int cols = 8, int rows = 8)
+        {
+            var list = new List<SlotRead>();
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                {
+                    var f = IconFeature(img, g, r, c);
+                    double empty = Dist(f, EmptySlot);
+                    var best = icons.Select(t => (t.name, d: Dist(f, t.f))).OrderBy(t => t.d).First();
+                    if (empty < best.d || best.d > 1.0) continue;                   // empty slot or something that isn't a known core
+                    var s = new SlotRead { Row = r, Col = c, Item = best.name, IconDist = best.d };
+                    s.Count = ReadCount(img, g, r, c, digits, s.Cells);
+                    list.Add(s);
+                }
+            return list;
+        }
+
+        /// The slot frame has two bright lines ~8 px apart, so the snap can land on either one. Try the neighbours
+        /// and keep the grid that reads best: most recognised cores, fewest unreadable counts, closest icons.
+        public static (Grid grid, List<SlotRead> slots) BestRead(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits)
+        {
+            (Grid, List<SlotRead>, double) best = (g, new List<SlotRead>(), double.MinValue);
+            double step = SlotInset * g.Scale;
+            foreach (var dx in new[] { 0.0, -step, step })
+                foreach (var dy in new[] { 0.0, -step, step })
+                {
+                    var cand = g; cand.X += dx; cand.Y += dy;
+                    var read = ReadInventory(img, cand, icons, digits);
+                    double score = read.Count * 10 + read.Count(r => r.Count.HasValue) * 5 - read.Sum(r => r.IconDist) - read.Count(r => r.Count == 1) * 2;
+                    if (score > best.Item3) best = (cand, read, score);
+                }
+            return (best.Item1, best.Item2);
+        }
+
+        /// Teaches digits from a count the player typed: pairs each digit cell (right to left) with the typed digit
+        /// and returns the cells that the current templates don't already match closely.
+        public static List<(char d, string cell)> LearnDigits(Img img, Grid g, int r, int c, int typed, IList<(char d, string cell)> templates)
+        {
+            var learned = new List<(char, string)>();
+            if (typed < 10 && typed <= 1) return learned;             // "1" has no number drawn
+            string t = typed.ToString(CultureInfo.InvariantCulture);
+            for (int i = 0; i < t.Length; i++)
+            {
+                char d = t[t.Length - 1 - i];
+                string cell = Cell(img, g, r, c, i);
+                if (cell.Count(ch => ch == '#') < 6) break;
+                var near = templates.Where(x => x.d == d).Select(x => CellDist(cell, x.cell)).DefaultIfEmpty(int.MaxValue).Min();
+                if (near > 8) learned.Add((d, cell));
+            }
+            return learned;
+        }
+
+        // ---------- dungeon end window ----------
+        /// Cheap check before reading text: the end window is a dark panel with yellow text lines.
+        public static bool EndWindowLikely(Img img)
+        {
+            int yellow = 0, dark = 0, tot = 0;
+            for (int y = 0; y < img.H; y += 2)
+                for (int x = 0; x < img.W; x += 2)
+                {
+                    img.Rgb(x, y, out int r, out int g, out int b); tot++;
+                    if (r > 180 && g > 110 && b < 90 && r > g) yellow++;
+                    if (Math.Max(r, Math.Max(g, b)) < 45) dark++;
+                }
+            return tot > 0 && yellow * 1000 >= tot * 3 && dark * 100 >= tot * 55;
+        }
+
+        public sealed class RunResult { public string Dungeon; public int Seconds; public int Dp; }
+        static readonly Regex TimeRx = new Regex(@"Time\s*[:;.]?\s*(\d+)\s*min\S*\s*(\d+)\s*sec", RegexOptions.IgnoreCase);
+        static readonly Regex DpRx = new Regex(@"Point\s*Gained\s*[:;.]?\s*(\d+)", RegexOptions.IgnoreCase);
+
+        /// Parses the end window's text. null when it isn't a "Quest Dungeon Cleared!" window.
+        public static RunResult ParseEndWindow(IList<string> lines)
+        {
+            int cleared = -1;
+            for (int i = 0; i < lines.Count; i++) if (lines[i].IndexOf("Cleared", StringComparison.OrdinalIgnoreCase) >= 0) { cleared = i; break; }
+            if (cleared < 0) return null;
+            string all = string.Join(" ", lines);
+            var tm = TimeRx.Match(all); var dp = DpRx.Match(all);
+            string name = null;
+            for (int i = cleared - 1; i >= 0; i--)
+            {
+                var l = lines[i].Trim();
+                if (l.Length < 3 || l.Equals("Dungeon", StringComparison.OrdinalIgnoreCase) || l.StartsWith("Screenshot", StringComparison.OrdinalIgnoreCase)) continue;
+                name = l; break;
+            }
+            return new RunResult
+            {
+                Dungeon = name ?? "Unknown dungeon",
+                Seconds = tm.Success ? int.Parse(tm.Groups[1].Value) * 60 + int.Parse(tm.Groups[2].Value) : 0,
+                Dp = dp.Success ? int.Parse(dp.Groups[1].Value) : 0
+            };
+        }
+
+        // ---------- loot feed ----------
+        /// The feed scrolls up; new lines are what follows the longest overlap between the old tail and the new head.
+        /// Identical lines in a row are ambiguous, which is why this is only used for rare drops.
+        public static List<string> NewLines(IList<string> prev, IList<string> cur)
+        {
+            if (prev == null || prev.Count == 0) return cur.ToList();
+            for (int k = Math.Min(prev.Count, cur.Count); k > 0; k--)
+            {
+                bool ok = true;
+                for (int i = 0; i < k && ok; i++) if (!Same(prev[prev.Count - k + i], cur[i])) ok = false;
+                if (ok) return cur.Skip(k).ToList();
+            }
+            return cur.ToList();
+        }
+        static bool Same(string a, string b) => Norm(a) == Norm(b);
+        static string Norm(string s) => new string((s ?? "").Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+
+        static readonly Regex LootRx = new Regex(@"Obtain\s+(.+?)\s*x\s*(\d+)\s*$", RegexOptions.IgnoreCase);
+        public static (string item, int qty)? ParseLoot(string line)
+        {
+            var m = LootRx.Match((line ?? "").Trim());
+            return m.Success ? (m.Groups[1].Value.Trim(), int.Parse(m.Groups[2].Value)) : ((string, int)?)null;
+        }
+    }
+}

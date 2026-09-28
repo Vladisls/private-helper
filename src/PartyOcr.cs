@@ -142,6 +142,42 @@ namespace CAHelper
         }
 
 
+        /// Reads the text lines of a bitmap (enlarged first for small fonts).
+        public static async Task<List<string>> ReadLinesAsync(Bitmap bmp, int enlarge = 2)
+        {
+            var engine = CreateEngine();
+            if (engine == null) throw new InvalidOperationException("Windows has no text-recognition language installed (add English in Settings > Time & language > Language).");
+            byte[] png;
+            using (var big = Enlarge(bmp, enlarge)) png = Png(big);
+            using (var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream())
+            {
+                await ras.WriteAsync(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(png));
+                ras.Seek(0);
+                var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(ras);
+                using (var sb = await decoder.GetSoftwareBitmapAsync(Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8, Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied))
+                {
+                    var result = await engine.RecognizeAsync(sb);
+                    var lines = new List<string>();
+                    foreach (var line in result.Lines) lines.Add(line.Text);
+                    return lines;
+                }
+            }
+        }
+
+        /// Copies a bitmap's pixels into the platform-neutral Img the farm logic works on.
+        public static Img ToImg(Bitmap bmp)
+        {
+            var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            var d = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                var buf = new byte[bmp.Width * bmp.Height * 4];
+                for (int y = 0; y < bmp.Height; y++) Marshal.Copy(d.Scan0 + y * d.Stride, buf, y * bmp.Width * 4, bmp.Width * 4);
+                return new Img(bmp.Width, bmp.Height, buf);
+            }
+            finally { bmp.UnlockBits(d); }
+        }
+
         static Windows.Media.Ocr.OcrEngine CreateEngine()
         {
             try
@@ -161,9 +197,10 @@ namespace CAHelper
         readonly Bitmap shot; readonly Rectangle virt;
         Point start; Rectangle sel; bool dragging;
 
-        AreaPicker(Bitmap shot, Rectangle virt)
+        readonly string message;
+        AreaPicker(Bitmap shot, Rectangle virt, string message)
         {
-            this.shot = shot; this.virt = virt;
+            this.shot = shot; this.virt = virt; this.message = message;
             FormBorderStyle = FormBorderStyle.None; StartPosition = FormStartPosition.Manual; Bounds = virt;
             TopMost = true; ShowInTaskbar = false; DoubleBuffered = true; Cursor = Cursors.Cross; KeyPreview = true;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
@@ -191,7 +228,7 @@ namespace CAHelper
                 g.FillRegion(dim, region);
             }
             if (!sel.IsEmpty) using (var p = new Pen(Theme.Accent, 2)) g.DrawRectangle(p, sel);
-            var msg = "Drag a box around the party member list, including the \"member (19/25)\" line. Esc cancels.";
+            var msg = message;
             using (var f = new Font("Segoe UI", 14f, FontStyle.Bold))
             {
                 var size = g.MeasureString(msg, f);
@@ -201,7 +238,7 @@ namespace CAHelper
             }
         }
 
-        public static Rectangle? Pick()
+        public static Rectangle? Pick(string message = "Drag a box around the party member list, including the \"member (19/25)\" line. Esc cancels.")
         {
             using (new DpiAware())
             {
@@ -209,7 +246,7 @@ namespace CAHelper
                 using (var shot = new Bitmap(virt.Width, virt.Height, PixelFormat.Format32bppArgb))
                 {
                     using (var g = Graphics.FromImage(shot)) g.CopyFromScreen(virt.Location, Point.Empty, virt.Size);
-                    using (var f = new AreaPicker(shot, virt))
+                    using (var f = new AreaPicker(shot, virt, message))
                         return f.ShowDialog() == DialogResult.OK ? f.Picked : (Rectangle?)null;
                 }
             }
