@@ -83,6 +83,7 @@ namespace CAHelper
         readonly Button startStop = Theme.MakeButton("Start session", primary: true);
         readonly FlowLayoutPanel body = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 4, 0, 0) };
         readonly Label footer = new Label { Dock = DockStyle.Bottom, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted, Cursor = Cursors.Hand, Text = "Areas & learning ▾", TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
+        readonly Label saveImage = new Label { Dock = DockStyle.Bottom, Height = 20, Font = Theme.Small, ForeColor = Theme.Accent, Cursor = Cursors.Hand, Text = "Save image (screen + debug lines)", TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
 
         public FarmWidget() : base(320, 200)
         {
@@ -94,7 +95,8 @@ namespace CAHelper
             confirmBox.Controls.Add(confirmText); confirmBox.Controls.Add(confirmButtons);
             confirmYes.Click += (s, e) => { Touch(); ResolvePending(true); };
             confirmAgain.Click += (s, e) => { Touch(); ResolvePending(false); };
-            Content.Controls.Add(body); Content.Controls.Add(confirmBox); Content.Controls.Add(footer); Content.Controls.Add(startStop); Content.Controls.Add(status);
+            Content.Controls.Add(body); Content.Controls.Add(confirmBox); Content.Controls.Add(saveImage); Content.Controls.Add(footer); Content.Controls.Add(startStop); Content.Controls.Add(status);
+            saveImage.Click += (s, e) => { Touch(); SaveView(); };
             startStop.Click += (s, e) => { Touch(); if (!running) StartSession(); else if (finishing) StopSession(); else RequestStop(); };
             footer.Click += (s, e) => { Touch(); Menu2().Show(footer, new Point(0, footer.Height)); };
             debugTip.SetToolTip(debugBox, "Debug: draw what the tracker sees on screen");
@@ -283,6 +285,40 @@ namespace CAHelper
             return new Restore(() => { if (overlay != null) overlay.Visible = true; });
         }
         sealed class Restore : IDisposable { readonly Action a; public Restore(Action a) { this.a = a; } public void Dispose() => a(); }
+
+        /// Screenshot of the screen with the debug drawings painted on it (the helper's own windows are invisible to
+        /// screen captures, so the snipping tool can't show them). Saved as cabal-helper-farm-view-N.png (last 5).
+        int viewSaves;
+        void SaveView()
+        {
+            try
+            {
+                bool hadOverlay = overlay != null;
+                if (!hadOverlay) { overlay = DebugOverlay.Create(); }
+                Probe(DateTime.Now.AddSeconds(5));                                   // refresh what the overlay shows
+                var screen = PartyOcr.PhysicalVirtualScreen();
+                using (var bmp = PartyOcr.Capture(screen))
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    overlay.Render(g, -screen.X, -screen.Y);
+                    string label = $"Cabal Helper v{Updater.Short(Updater.Current)} · {DateTime.Now:yyyy-MM-dd HH:mm:ss} · {status.Text}";
+                    using (var f = new Font("Segoe UI", 11f, FontStyle.Bold))
+                    {
+                        var size = g.MeasureString(label, f);
+                        g.FillRectangle(new SolidBrush(Color.FromArgb(200, 0, 0, 0)), 8, 8, size.Width + 12, size.Height + 6);
+                        g.DrawString(label, f, Brushes.White, 14, 11);
+                    }
+                    viewSaves = (viewSaves + 1) % 5;
+                    string path = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}.png");
+                    bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                    Debug("view saved as " + Path.GetFileName(path));
+                    Files.OpenFolder(path);
+                }
+                if (!hadOverlay) { overlay.Close(); overlay.Dispose(); overlay = null; }
+            }
+            catch (Exception ex) { MessageBox.Show("Could not save the image: " + ex.Message, "Farm Tracker"); }
+        }
 
         void SetOverlay(bool on)
         {
@@ -807,7 +843,7 @@ namespace CAHelper
         /// Grow or shrink to the content instead of a fixed size.
         void FitHeight()
         {
-            int want = 26 /*title*/ + Content.Padding.Vertical + status.Height + startStop.Height + 6 + Ui.LinesHeight(body) + footer.Height + 8
+            int want = 26 /*title*/ + Content.Padding.Vertical + status.Height + startStop.Height + 6 + Ui.LinesHeight(body) + footer.Height + saveImage.Height + 8
                      + (confirmBox.Visible ? confirmBox.PreferredSize.Height : 0);
             int max = Screen.FromControl(this).WorkingArea.Height - 40;
             int h = Math.Max(150, Math.Min(max, want));

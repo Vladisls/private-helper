@@ -36,9 +36,13 @@ namespace CAHelper
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            var g = e.Graphics;
-            g.Clear(Key);
-            int ox = -Virt.X, oy = -Virt.Y;
+            e.Graphics.Clear(Key);
+            Render(e.Graphics, -Virt.X, -Virt.Y);
+        }
+
+        /// Draws the boxes, lines and tags with the given offset (used for the live overlay and for saved pictures).
+        public void Render(Graphics g, int ox, int oy)
+        {
             foreach (var l in Lines) using (var p = new Pen(l.C, 1)) g.DrawLine(p, l.A.X + ox, l.A.Y + oy, l.B.X + ox, l.B.Y + oy);
             foreach (var b in Boxes)
             {
