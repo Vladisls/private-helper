@@ -574,9 +574,24 @@ namespace CAHelper
                 foreach (var kv in recent)
                 {
                     if (missingStreak.TryGetValue(kv.Key, out int m) && m >= MissingAfter) continue;
-                    d[kv.Key] = kv.Value.GroupBy(v => v).OrderByDescending(g => g.Count()).ThenByDescending(g => g.Key).First().Key;
+                    d[kv.Key] = Consensus(kv.Value);
                 }
                 return d;
+            }
+
+            /// Most common value, where a value that is the tail of a longer one (58 of 158: the icon shine can hide
+            /// the leading digit, never add one) lends its votes to the longer value.
+            public static int Consensus(IList<int> values)
+            {
+                var groups = values.GroupBy(v => v).ToDictionary(g => g.Key, g => g.Count());
+                int best = -1, bestVotes = -1;
+                foreach (var v in groups.Keys)
+                {
+                    string sv = v.ToString(CultureInfo.InvariantCulture);
+                    int votes = groups.Where(g => sv.EndsWith(g.Key.ToString(CultureInfo.InvariantCulture)) && sv.Length >= g.Key.ToString(CultureInfo.InvariantCulture).Length).Sum(g => g.Value);
+                    if (votes > bestVotes || (votes == bestVotes && v > best)) { best = v; bestVotes = votes; }
+                }
+                return best;
             }
 
             /// Cores that were seen earlier but have been absent for MissingAfter reads or more.

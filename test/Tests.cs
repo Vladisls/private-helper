@@ -369,6 +369,8 @@ static class T {
     var sm = new FarmCheck.CountSmoother();
     foreach (var v in new[]{ 158, 58, 158, 158, 58 }) sm.Add(new Dictionary<string,int>{ ["FC High"]=v, ["FC Med"]=16 });
     Check(sm.Stable()["FC High"]==158 && sm.Stable()["FC Med"]==16, "smoother: 158 wins over an occasional 58");
+    Check(FarmCheck.CountSmoother.Consensus(new[]{ 58, 58, 58, 158, 58 })==158 && FarmCheck.CountSmoother.Consensus(new[]{ 223, 23, 23, 3 })==223
+          && FarmCheck.CountSmoother.Consensus(new[]{ 14, 14, 15 })==14 && FarmCheck.CountSmoother.Consensus(new[]{ 9, 9, 8 })==9, "a truncated count (58) always yields to the full one (158); unrelated values vote normally");
     sm.Add(new Dictionary<string,int>{ ["FC High"]=158 }); sm.Add(new Dictionary<string,int>{ ["FC High"]=158 });
     Check(sm.Stable().ContainsKey("FC Med") && sm.Gone().Count==0, "a core missing in 2 reads is not gone yet");
     sm.Add(new Dictionary<string,int>{ ["FC High"]=158 });
