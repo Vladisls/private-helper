@@ -23,6 +23,7 @@ namespace CAHelper
         static string InvShotPath => Path.Combine(Dir, "cabal-helper-farm-inventory.png");
         static string InvRawPath => Path.Combine(Dir, "cabal-helper-farm-inventory-raw.png");
         readonly List<string> debug = new List<string>();
+        string waitReason;                                                      // why the last inventory check didn't produce counts
         string lastDebugKey;
 
         /// Diagnostics: a rolling text log of what the tracker decided (last 300 lines).
@@ -298,6 +299,7 @@ namespace CAHelper
                     if (!FarmCheck.InventoryOpen(img, g0))
                     {
                         invOpenSince = DateTime.MinValue; Debug($"inventory not open in its area (grid contrast {g0.Score:0.00}, needs 1.70)", "closed");
+                        waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
                         if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
                         return;
                     }
@@ -306,6 +308,7 @@ namespace CAHelper
                 if (!FarmCheck.InventoryOpen(img, grid.Value))
                 {
                     invOpenSince = DateTime.MinValue; Debug("inventory closed (or moved)", "closed");
+                    waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
                     if (baseline == null || finishing) TryLocateInventory(now);
                     return;
                 }
@@ -314,12 +317,30 @@ namespace CAHelper
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
                 double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
-                if (tabDist > FarmCheck.TabMatchMax) { Debug($"skipped: another inventory tab is open (tab strip differs {tabDist:0.0}, limit {FarmCheck.TabMatchMax})", "othertab"); return; }
                 var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits);
                 int found = slots.Select(x => x.Item).Distinct().Count();
+                int allCores = icons.Select(i => i.name).Distinct().Count();
+                if (tabDist > FarmCheck.TabMatchMax)
+                {
+                    // Most of the cores recognised: this IS the core tab, the saved tab strip is stale. Re-learn it.
+                    if (found >= Math.Max(5, allCores * 7 / 10))
+                    { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug($"tab strip looked different ({tabDist:0.0}) but {found} cores were recognised: core tab re-learned"); }
+                    else
+                    {
+                        Debug($"skipped: another inventory tab is open (tab strip differs {tabDist:0.0}, limit {FarmCheck.TabMatchMax}; {found} core types recognised)", "othertab");
+                        waitReason = "another inventory tab seems to be open - switch to the core tab";
+                        return;
+                    }
+                }
                 int expectedFound = baseline != null ? baseline.Count(kv => kv.Value > 0) : Math.Min(5, icons.Count / 2);
                 SaveAnnotated(bmp, g, slots, top);
-                if (found == 0 || found * 2 < expectedFound) { Debug($"skipped: only {found} core types recognised (need {Math.Max(1, (expectedFound + 1) / 2)}) - wrong tab or icons need re-learning", "few:" + found); return; }
+                if (found == 0 || found * 2 < expectedFound)
+                {
+                    Debug($"skipped: only {found} core types recognised (need {Math.Max(1, (expectedFound + 1) / 2)}) - wrong tab or icons need re-learning", "few:" + found);
+                    waitReason = $"only {found} core types recognised - core tab open? (else Areas & learning > Learn core icons)";
+                    return;
+                }
+                waitReason = null;
                 if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
                 Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col}={(x.Count?.ToString() ?? "?")} (icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.Count)));
                 grid = g; lastInvImg = img; lastSlots = slots;
@@ -502,7 +523,11 @@ namespace CAHelper
             var lines = new List<Ui.Line>();
             void Line(string t, Color col, bool bold = false) => lines.Add(new Ui.Line(t, col, bold));
             if (running && !finishing && baseline == null)
+            {
                 Line("Open the core tab for a moment to save the start counts. Runs and drops are already being counted.", Color.FromArgb(245, 196, 81), true);
+                if (waitReason != null) Line("Waiting: " + waitReason, Theme.Muted);
+            }
+            if (finishing && waitReason != null) Line("Waiting: " + waitReason, Theme.Muted);
             if (finishing)
                 Line($"Open the core tab for a moment to save the final counts. Stops by itself once read ({Math.Max(0, FinishTimeoutSeconds - (int)(DateTime.Now - finishStarted).TotalSeconds)} s).", Color.FromArgb(245, 196, 81), true);
 
