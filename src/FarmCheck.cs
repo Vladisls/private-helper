@@ -783,21 +783,41 @@ namespace CAHelper
         }
         public const double ButtonGoodMax = 22, CrossGoodMax = 30;
 
-        /// Pins the grid to the sword button (and checks the scale with the close cross). Searches within about a slot
-        /// of where the button should be for the given grid. Returns the anchored grid; ok = false if the button wasn't
-        /// found convincingly (then the given grid is returned unchanged).
-        public static Grid AnchorByButtons(Img img, Grid g, out bool ok, out string info)
+        public sealed class AnchorResult
         {
+            public bool Ok; public string Info = "";
+            public Rectangle ButtonSearch, CrossSearch, ButtonAt, CrossAt;   // image coordinates
+            public double ButtonDiff = double.MaxValue, CrossDiff = double.MaxValue;
+            public double ScaleCheck;
+        }
+
+        /// Pins the grid to the sword button (and checks the scale with the close cross). Looks within about a slot of
+        /// where the button should be for the given grid; if it isn't there, over the whole picture. ok = false when the
+        /// button isn't found convincingly (then the given grid is returned unchanged).
+        public static Grid AnchorByButtons(Img img, Grid g, out bool ok, out string info) { var r = AnchorByButtons(img, g, out var res); ok = res.Ok; info = res.Info; return r; }
+        public static Grid AnchorByButtons(Img img, Grid g, out AnchorResult res)
+        {
+            res = new AnchorResult();
             double sc = g.Scale;
             int ex = (int)Math.Round(g.X - ButtonToGridX * sc), ey = (int)Math.Round(g.Y - ButtonToGridY * sc);
             int win = (int)Math.Round(g.PitchX);
+            res.ButtonSearch = new Rectangle(ex - win, ey - win, 2 * win + (int)(ButtonW * sc), 2 * win + (int)(ButtonH * sc));
             var (bAt, bD) = FindTemplate(img, ButtonTemplate, ButtonW, ButtonH, new Rectangle(ex - win, ey - win, 2 * win + 1, 2 * win + 1), sc);
-            if (bD > ButtonGoodMax) { ok = false; info = $"button not found (diff {bD:0.0})"; return g; }
+            if (bD > ButtonGoodMax)
+            {
+                var (bAt2, bD2) = FindTemplate(img, ButtonTemplate, ButtonW, ButtonH, new Rectangle(0, 0, img.W, img.H), sc);   // anywhere in the picture
+                if (bD2 < bD) { bAt = bAt2; bD = bD2; res.ButtonSearch = new Rectangle(0, 0, img.W, img.H); }
+            }
+            res.ButtonAt = new Rectangle(bAt.X, bAt.Y, (int)(ButtonW * sc), (int)(ButtonH * sc)); res.ButtonDiff = bD;
+            if (bD > ButtonGoodMax) { res.Ok = false; res.Info = $"button not found (best diff {bD:0.0}, limit {ButtonGoodMax})"; return g; }
             var r = g; r.X = bAt.X + ButtonToGridX * sc; r.Y = bAt.Y + ButtonToGridY * sc;
             int cx = (int)Math.Round(bAt.X + ButtonToCrossX * sc), cy = (int)Math.Round(bAt.Y + ButtonToCrossY * sc);
+            res.CrossSearch = new Rectangle(cx - win, cy - win, 2 * win + (int)(CrossW * sc), 2 * win + (int)(CrossH * sc));
             var (xAt, xD) = FindTemplate(img, CrossTemplate, CrossW, CrossH, new Rectangle(cx - win, cy - win, 2 * win + 1, 2 * win + 1), sc);
-            string crossInfo = xD <= CrossGoodMax ? $"cross at {xAt.X},{xAt.Y} (diff {xD:0.0}, scale check {(xAt.X - bAt.X) / ButtonToCrossX:0.000})" : $"cross not found (diff {xD:0.0})";
-            ok = true; info = $"button at {bAt.X},{bAt.Y} (diff {bD:0.0}) -> grid {r.X:0},{r.Y:0}; " + crossInfo;
+            res.CrossAt = new Rectangle(xAt.X, xAt.Y, (int)(CrossW * sc), (int)(CrossH * sc)); res.CrossDiff = xD;
+            res.ScaleCheck = (xAt.X - bAt.X) / (ButtonToCrossX * sc);
+            string crossInfo = xD <= CrossGoodMax ? $"cross at {xAt.X},{xAt.Y} (diff {xD:0.0}, scale check {res.ScaleCheck:0.000})" : $"cross not found (diff {xD:0.0})";
+            res.Ok = true; res.Info = $"button at {bAt.X},{bAt.Y} (diff {bD:0.0}) -> grid {r.X:0},{r.Y:0}; " + crossInfo;
             return r;
         }
 

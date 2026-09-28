@@ -64,7 +64,7 @@ namespace CAHelper
         List<string> lastLoot; long lootPrint;
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
         Grid? grid; Grid? readGrid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
-        string lastAnchorInfo, ovAnchor = ""; bool ovAnchorOk;
+        string lastAnchorInfo, ovAnchor = ""; bool ovAnchorOk; FarmCheck.AnchorResult ovAnchorRes; Rectangle ovAnchorCap;
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot, busyInv; int stripSaves;
@@ -298,6 +298,21 @@ namespace CAHelper
             var invC = ovInvCap == Rectangle.Empty ? InvCapture : ovInvCap;
             overlay.Boxes.Add(new DebugOverlay.Box { R = invArea, C = Color.DeepSkyBlue, Label = $"Inventory ({locatedBy}): " + ovInv });
             if (ovTitle != Rectangle.Empty) overlay.Boxes.Add(new DebugOverlay.Box { R = ovTitle, C = Color.DeepSkyBlue, Label = "title" });
+            if (ovAnchorRes != null)
+            {
+                Rectangle Sc(Rectangle r) => new Rectangle(ovAnchorCap.X + r.X, ovAnchorCap.Y + r.Y, r.Width, r.Height);
+                var a = ovAnchorRes; var violet = Color.FromArgb(200, 120, 255);
+                if (a.ButtonSearch != Rectangle.Empty) overlay.Boxes.Add(new DebugOverlay.Box { R = Sc(a.ButtonSearch), C = Color.FromArgb(120, 70, 160), Label = "button search" });
+                overlay.Boxes.Add(new DebugOverlay.Box { R = Sc(a.ButtonAt), C = a.ButtonDiff <= FarmCheck.ButtonGoodMax ? Color.Lime : Color.Red, Label = $"sword button {(a.ButtonDiff <= FarmCheck.ButtonGoodMax ? "✓" : "✗")} diff {a.ButtonDiff:0.0}" });
+                if (a.CrossSearch != Rectangle.Empty)
+                {
+                    overlay.Boxes.Add(new DebugOverlay.Box { R = Sc(a.CrossSearch), C = Color.FromArgb(120, 70, 160), Label = "cross search" });
+                    overlay.Boxes.Add(new DebugOverlay.Box { R = Sc(a.CrossAt), C = a.CrossDiff <= FarmCheck.CrossGoodMax ? Color.Lime : Color.Red, Label = $"close cross {(a.CrossDiff <= FarmCheck.CrossGoodMax ? "✓" : "✗")} diff {a.CrossDiff:0.0} scale {a.ScaleCheck:0.000}" });
+                    if (a.Ok) overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(Sc(a.ButtonAt).X, Sc(a.ButtonAt).Y), B = new Point(Sc(a.CrossAt).X, Sc(a.CrossAt).Y), C = violet });
+                }
+                if (a.Ok && ovGrid is Grid gg2)
+                    overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(Sc(a.ButtonAt).X, Sc(a.ButtonAt).Y), B = new Point(ovAnchorCap.X + (int)gg2.X, ovAnchorCap.Y + (int)gg2.Y), C = violet });
+            }
             if (ovGrid is Grid g)
             {
                 int gx = invC.X, gy = invC.Y;
@@ -342,7 +357,9 @@ namespace CAHelper
                     if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null; }
                     else
                     {
-                        var (g2, slots) = FarmCheck.BestRead(img, g, icons, Digits);
+                        var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult pres);
+                        ovAnchorRes = pres; ovAnchorCap = InvCapture; ovAnchor = pres.Info; ovAnchorOk = pres.Ok;
+                        var (g2, slots) = pres.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, Digits)) : FarmCheck.BestRead(img, g, icons, Digits);
                         ovGrid = g2; ovSlots = slots; ovInv = $"open, contrast {g.Score:0.00}, {slots.Select(x => x.Item).Distinct().Count()} core types";
                         double td = coreTab == null ? -1 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, g2));
                         ovTab = td < 0 ? "Tab: not learned yet" : td <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({td:0.0})" : $"Other tab? ({td:0.0} > {FarmCheck.TabMatchMax})";
@@ -460,9 +477,10 @@ namespace CAHelper
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
                 double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
-                var anchored = FarmCheck.AnchorByButtons(img, grid.Value, out bool anchorOk, out string anchorInfo);
+                var anchored = FarmCheck.AnchorByButtons(img, grid.Value, out FarmCheck.AnchorResult ares);
+                bool anchorOk = ares.Ok; string anchorInfo = ares.Info;
                 if (anchorInfo != lastAnchorInfo) { Debug("anchor: " + anchorInfo, "anchor"); lastAnchorInfo = anchorInfo; }
-                ovAnchor = anchorInfo; ovAnchorOk = anchorOk;
+                ovAnchor = anchorInfo; ovAnchorOk = anchorOk; ovAnchorRes = ares; ovAnchorCap = InvCapture;
                 var (g, slots) = anchorOk
                     ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, Digits))       // pinned: no position search
                     : FarmCheck.BestRead(img, grid.Value, icons, Digits, keep: readGrid);
