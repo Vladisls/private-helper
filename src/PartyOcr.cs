@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -209,6 +210,15 @@ namespace CAHelper
             return all;
         }
 
+        public static Bitmap FromImg(Img img)
+        {
+            var bmp = new Bitmap(img.W, img.H, PixelFormat.Format32bppArgb);
+            var d = bmp.LockBits(new Rectangle(0, 0, img.W, img.H), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try { for (int y = 0; y < img.H; y++) Marshal.Copy(img.Px, y * img.W * 4, d.Scan0 + y * d.Stride, img.W * 4); }
+            finally { bmp.UnlockBits(d); }
+            return bmp;
+        }
+
         /// Copies a bitmap's pixels into the platform-neutral Img the farm logic works on.
         public static Img ToImg(Bitmap bmp)
         {
@@ -246,32 +256,36 @@ namespace CAHelper
             }
         }
 
-        /// Reads the stack counts of several slots with the text reader in one call: the digit bands are cut out,
-        /// cleaned to dark digits on light, enlarged and stacked into one strip. null entries = unreadable.
-        public static async Task<int?[]> ReadDigitBandsAsync(Bitmap capture, IList<Rectangle> bands)
+        /// Reads the stack counts of several slots with the text reader in one call: each slot's validated digit
+        /// cells (already dark-on-white) are enlarged and stacked into one strip. A result is only accepted when the
+        /// reader returns exactly as many digits as there are cells. null entries = not read.
+        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> cellCounts)
         {
-            if (bands.Count == 0) return new int?[0];
-            int bw = bands.Max(b => b.Width), bh = bands.Max(b => b.Height);
-            using (var strip = new Bitmap(bw, bands.Count * (bh + DigitGap), PixelFormat.Format32bppArgb))
+            var result = new int?[strips.Count];
+            var present = new List<int>(); for (int i = 0; i < strips.Count; i++) if (strips[i] != null) present.Add(i);
+            if (present.Count == 0) return result;
+            int bw = present.Max(i => strips[i].W), bh = present.Max(i => strips[i].H);
+            using (var strip = new Bitmap(bw * DigitEnlarge, present.Count * (bh + DigitGap) * DigitEnlarge, PixelFormat.Format32bppArgb))
             {
                 using (var g = Graphics.FromImage(strip))
                 {
-                    g.Clear(Color.Black);
-                    for (int i = 0; i < bands.Count; i++)
-                    {
-                        var b = Rectangle.Intersect(bands[i], new Rectangle(0, 0, capture.Width, capture.Height));
-                        if (b.Width > 0 && b.Height > 0) g.DrawImage(capture, new Rectangle(0, i * (bh + DigitGap), b.Width, b.Height), b, GraphicsUnit.Pixel);
-                    }
+                    g.Clear(Color.White);
+                    g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half;
+                    for (int k = 0; k < present.Count; k++)
+                        using (var bmp = FromImg(strips[present[k]]))
+                            g.DrawImage(bmp, new Rectangle(0, k * (bh + DigitGap) * DigitEnlarge, bmp.Width * DigitEnlarge, bmp.Height * DigitEnlarge));
                 }
-                using (var big = Enlarge(strip, DigitEnlarge))
-                using (var clean = Clean(big, 150, 245, 1.5))
+                LastStrip?.Dispose(); LastStrip = (Bitmap)strip.Clone(); LastClean?.Dispose(); LastClean = (Bitmap)strip.Clone();
+                var lines = await ReadWordsAsync(strip, 1);
+                var words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l);
+                LastWords = words;
+                var mapped = FarmCheck.MapStripWords(words, present.Count, bh, DigitGap, DigitEnlarge);
+                for (int k = 0; k < present.Count; k++)
                 {
-                    LastStrip?.Dispose(); LastStrip = (Bitmap)big.Clone(); LastClean?.Dispose(); LastClean = (Bitmap)clean.Clone();
-                    var lines = await ReadWordsAsync(clean, 1);
-                    var words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l);
-                    LastWords = words;
-                    return FarmCheck.MapStripWords(words, bands.Count, bh, DigitGap, DigitEnlarge);
+                    int i = present[k];
+                    if (mapped[k].HasValue && mapped[k].Value.ToString(CultureInfo.InvariantCulture).Length == cellCounts[i]) result[i] = mapped[k];
                 }
+                return result;
             }
         }
 

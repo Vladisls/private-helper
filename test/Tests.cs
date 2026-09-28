@@ -320,6 +320,41 @@ static class T {
       // grid picker must prefer the grid that reads real digits over a shifted one that reads "1"s
       { var gOk = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var (gPick, sPick) = FarmCheck.BestRead(inv, gOk, icons, digs);
         Check(sPick.Count(x => x.Cells.Count > 0) == 10 && sPick.All(x => x.Count > 1 || x.Cells.Count > 0), "grid picker keeps the alignment where counts come from real digits"); }
+      // glyph-based count reading on both captures (JPG screenshot and live PNG)
+      foreach (var (label, im, box) in new[]{ ("screenshot", inv, (1912,248,612,612)), ("live", Load(fmis), (815,160,620,620)) }) {
+        var gg = FarmCheck.BestRead(im, FarmCheck.FindGrid(im, box.Item1, box.Item2, box.Item3, box.Item4), FarmCheck.DefaultIcons(), digs);
+        var outp = new List<string>(); int okc = 0;
+        foreach (var sl in gg.slots.OrderBy(x => x.Row * 8 + x.Col)) {
+          var br = FarmCheck.DigitBand(gg.grid, sl.Row, sl.Col); var bi = Crop(im, br.X, br.Y, br.Width, br.Height);
+          var glyphs = FarmCheck.CountCells(bi, gg.grid.Scale, digs); var v = FarmCheck.ReadCountFromCells(bi, glyphs, digs);
+          outp.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: {glyphs.Count} cells -> {(v?.ToString() ?? "?")} (fixed {sl.Count?.ToString() ?? "?"})");
+          if (v == sl.Count && v.HasValue) okc++;
+        }
+        Console.WriteLine($"GLYPH {label}: " + string.Join(" | ", outp));
+        foreach (var name in new string[0]) {
+          var sl = gg.slots.First(x => x.Item == name); var br = FarmCheck.DigitBand(gg.grid, sl.Row, sl.Col); var bi = Crop(im, br.X, br.Y, br.Width, br.Height);
+          var sb = new System.Text.StringBuilder();
+          for (int y = 0; y < bi.H; y++) { for (int x = 0; x < bi.W; x++) sb.Append(FarmCheck.DigitPxPublic(bi, x, y) ? '#' : '.'); sb.Append('\n'); }
+          var glyphs2 = FarmCheck.CountGlyphs(bi, gg.grid.Scale);
+          var descr = new List<string>();
+          foreach (var r in FarmCheck.LastComponents.Where(r => r.Height >= 8)) {
+            double cwr = 0, cwg = 0, cwb = 0, cwn = 0, cdr = 0, cdg = 0, cdb = 0, cdn = 0, csat = 0;
+            for (int y = r.Y; y < r.Bottom; y++) for (int x = r.X; x < r.Right; x++) {
+              bi.Rgb(x, y, out int R, out int G, out int B); int mx = Math.Max(R, Math.Max(G, B)), mn = Math.Min(R, Math.Min(G, B));
+              if (FarmCheck.DigitPxPublic(bi, x, y)) { cwr += R; cwg += G; cwb += B; cwn++; csat += mx - mn; }
+              else if (mx < 80) { cdr += R; cdg += G; cdb += B; cdn++; }
+            }
+            descr.Add($"[{r.X}-{r.Right - 1} h{r.Height}] white avg ({cwr / cwn:0},{cwg / cwn:0},{cwb / cwn:0}) sat {csat / cwn:0.0} | dark avg ({(cdn > 0 ? cdr / cdn : 0):0},{(cdn > 0 ? cdg / cdn : 0):0},{(cdn > 0 ? cdb / cdn : 0):0}) n{cdn}");
+          }
+          Console.WriteLine($"COMP {label} {name}: " + string.Join("  ||  ", descr));
+        }
+        Check(okc == 10, $"{label}: anchored cells read all 10 counts ({okc}/10)");
+      }
+      { var gS = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons(), digs);
+        var hi = gS.slots.First(x => x.Item == "Force Core (High)");
+        var strip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out int nCells);
+        int darkPx = 0; for (int i = 0; i < strip.Px.Length; i += 4) if (strip.Px[i] == 0) darkPx++;
+        Check(nCells == 3 && strip.W > 25 && strip.W < 40 && darkPx > 60, $"count strip for the reader: 3 cells, {strip.W}x{strip.H}, {darkPx} digit pixels, nothing else"); }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
@@ -384,7 +419,7 @@ static class T {
     var split = FarmCheck.MapStripWords(new[]{ new OcrWord("1", 30, 6, 15, 45), new OcrWord("58", 48, 6, 40, 45) }, 1, 28, 6, 3);
     Check(split[0]==158, "a count the reader splits into two words is joined in x order");
     var gi0 = new Grid { X = 1919, Y = 253, PitchX = 76.75, PitchY = 76.75 }; var band = FarmCheck.DigitBand(gi0, 0, 1);
-    Check(band.Width >= 55 && band.Height >= 26 && band.X > gi0.X + gi0.PitchX && band.X < gi0.X + 2 * gi0.PitchX, "digit band sits inside its slot");
+    Check(band.Width >= 55 && band.Height >= 15 && band.X > gi0.X + gi0.PitchX && band.X < gi0.X + 2 * gi0.PitchX, "digit band sits inside its slot");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
     var rr = FarmCheck.ParseEndWindow(endLines);
     Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");

@@ -127,8 +127,12 @@ FARM TRACKER
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
-- Stack counts are read with Windows' text reader (the digit strips are cut out, cleaned and
-  enlarged, one call per scan); the built-in digit shapes are only the fallback.
+- Stack counts: the count is anchored on its last digit (the one that never touches the icon), then
+  fixed digit cells are checked leftwards while they hold a digit. Those cells are read by shape and,
+  as a cross-check, by Windows' text reader (which must return exactly that many digits).
+- Diagnostics: when a count changes between reads or the two readers disagree, the strip the reader
+  saw (cabal-helper-farm-digits-N.png) and the exact inventory frame (cabal-helper-farm-frame-N.png)
+  are saved, last 5 of each.
 - A count shown as unreadable:
   Areas & learning > Fix counts, type the real number once and the digit is learned.
 - The inventory doesn't have to be where the area says: while waiting for core counts the

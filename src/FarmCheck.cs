@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Drawing;
+using System.Text;
 
 namespace CAHelper
 {
@@ -439,11 +440,183 @@ namespace CAHelper
             for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) if (Dark(img, x + dx, y + dy)) return true;
             return false;
         }
+        /// Cleans an (enlarged) count strip for the text reader: dark digits on white. Keeps only bright, uncoloured
+        /// pixels that have a dark pixel within reach, i.e. the outlined count text; the icon's shine is bright but
+        /// has no outline and is dropped. `enlarge` is the strip's enlargement factor (outline reach scales with it).
+        public static Img CleanDigits(Img src, int enlarge)
+        {
+            int W = src.W, H = src.H, reach = 2 * enlarge;
+            var white = new bool[W * H]; var dark = new bool[W * H];
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    src.Rgb(x, y, out int r, out int g, out int b);
+                    int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b));
+                    white[y * W + x] = mn >= 150 && mx - mn < 70;
+                    dark[y * W + x] = mx < 80;
+                }
+            var outPx = new byte[W * H * 4];
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    bool keep = false;
+                    if (white[y * W + x])
+                        for (int dy = -reach; dy <= reach && !keep; dy++)
+                            for (int dx = -reach; dx <= reach; dx++)
+                            {
+                                int nx = x + dx, ny = y + dy;
+                                if (nx >= 0 && ny >= 0 && nx < W && ny < H && dark[ny * W + nx]) { keep = true; break; }
+                            }
+                    byte v = keep ? (byte)0 : (byte)255; int i = (y * W + x) * 4;
+                    outPx[i] = outPx[i + 1] = outPx[i + 2] = v; outPx[i + 3] = 255;
+                }
+            return new Img(W, H, outPx);
+        }
+
+        /// The count's digit glyphs in a slot's digit band: outlined white shapes of digit height, chained from the
+        /// right edge leftwards (counts are right-aligned). Icon remains are farther left or the wrong height.
+        public static List<Rectangle> LastComponents = new List<Rectangle>();
+        public static List<Rectangle> CountGlyphs(Img band, double scale)
+        {
+            int W = band.W, H = band.H;
+            var m = new bool[W * H];
+            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) m[y * W + x] = DigitPx(band, x, y);
+            // connected components (8-neighbour)
+            var lab = new int[W * H]; var boxes = new List<Rectangle>(); int n = 0;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    if (!m[y * W + x] || lab[y * W + x] != 0) continue;
+                    n++; int minX = x, maxX = x, minY = y, maxY = y;
+                    var st = new Stack<(int, int)>(); st.Push((x, y)); lab[y * W + x] = n;
+                    while (st.Count > 0)
+                    {
+                        var (px, py) = st.Pop();
+                        minX = Math.Min(minX, px); maxX = Math.Max(maxX, px); minY = Math.Min(minY, py); maxY = Math.Max(maxY, py);
+                        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int nx = px + dx, ny = py + dy;
+                            if (nx < 0 || ny < 0 || nx >= W || ny >= H || !m[ny * W + nx] || lab[ny * W + nx] != 0) continue;
+                            lab[ny * W + nx] = n; st.Push((nx, ny));
+                        }
+                    }
+                    boxes.Add(Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1));
+                }
+            // merge pieces that overlap in x (a digit can break into two)
+            boxes = boxes.OrderBy(b => b.X).ToList();
+            var merged = new List<Rectangle>();
+            foreach (var b in boxes)
+            {
+                if (merged.Count > 0 && b.X <= merged[merged.Count - 1].Right) merged[merged.Count - 1] = Rectangle.Union(merged[merged.Count - 1], b);
+                else merged.Add(b);
+            }
+            double digitH = 16 * scale, digitW = 11 * scale;
+            LastComponents = merged;
+            var digitLike = merged.Where(b => b.Height >= digitH * 0.7 && b.Height <= digitH * 1.35 && b.Width <= digitW * 1.3).OrderByDescending(b => b.Right).ToList();
+            var chain = new List<Rectangle>();
+            foreach (var b in digitLike)
+            {
+                if (chain.Count == 0) { chain.Add(b); continue; }
+                var last = chain[chain.Count - 1];
+                if (last.X - b.Right > digitW * 0.7) break;                         // gap: the count has ended
+                if (Math.Abs(b.Bottom - last.Bottom) > digitH * 0.3) break;         // not on the same baseline
+                chain.Add(b);
+                if (chain.Count == 5) break;
+            }
+            chain.Reverse();                                                        // left to right
+            return chain;
+        }
+
+        /// Where the count sits in a digit band: anchored on the rightmost clean digit glyph (the last digit never
+        /// touches the icon), then fixed digit cells leftwards while each cell still holds a digit: enough outlined
+        /// white pixels, looking like a digit shape, with a near-black outline and no colour tint (icon remains are
+        /// tinted, grey-outlined and match no digit). Returns the cells, left to right.
+        public static List<Rectangle> CountCells(Img band, double scale, IList<(char d, string cell)> templates)
+        {
+            var glyphs = CountGlyphs(band, scale);
+            if (glyphs.Count == 0) return new List<Rectangle>();
+            var last = glyphs[glyphs.Count - 1];
+            int cw = (int)Math.Round(CW * scale), ch = (int)Math.Round(CH * scale);
+            int right = last.Right, bottom = Math.Max(last.Bottom, ch);
+            var cells = new List<Rectangle>();
+            for (int k = 0; k < 5; k++)
+            {
+                var cell = new Rectangle(right - (k + 1) * cw, bottom - ch, cw, ch);
+                if (cell.X < -cw / 2) break;
+                if (!CellIsDigit(band, cell, templates)) break;
+                cells.Insert(0, cell);
+            }
+            return cells;
+        }
+
+        public static bool CellIsDigit(Img band, Rectangle cell, IList<(char d, string cell)> templates)
+        {
+            int px = 0; double sat = 0, darkSum = 0; int darkN = 0;
+            var chars = new char[CW * CH];
+            for (int y = 0; y < CH; y++)
+                for (int x = 0; x < CW; x++)
+                {
+                    int bx = cell.X + x * cell.Width / CW, by = cell.Y + y * cell.Height / CH;
+                    bool d = DigitPx(band, bx, by);
+                    chars[y * CW + x] = d ? '#' : '.';
+                    if (!d) continue;
+                    px++;
+                    band.Rgb(bx, by, out int r, out int g, out int b);
+                    sat += Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b));
+                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                    {
+                        band.Rgb(bx + dx, by + dy, out int nr, out int ng, out int nb);
+                        int mx = Math.Max(nr, Math.Max(ng, nb));
+                        if (mx < 80) { darkSum += mx; darkN++; }
+                    }
+                }
+            if (px < 6) return false;
+            if (darkN > 0 && darkSum / darkN > 55 && sat / px > 12) return false;         // grey outline + tint: icon remains
+            var best = templates.Where(t => t.d != '_').Min(t => CellDist(new string(chars), t.cell));
+            return best <= DigitMatchMax;
+        }
+
+        /// Reads a count from its cells with the shape templates.
+        public static int? ReadCountFromCells(Img band, IList<Rectangle> cells, IList<(char d, string cell)> templates)
+        {
+            if (cells.Count == 0) return null;
+            var digits = new StringBuilder();
+            foreach (var cell in cells)
+            {
+                var chars = new char[CW * CH];
+                for (int y = 0; y < CH; y++) for (int x = 0; x < CW; x++) chars[y * CW + x] = DigitPx(band, cell.X + x * cell.Width / CW, cell.Y + y * cell.Height / CH) ? '#' : '.';
+                var best = templates.Where(t => t.d != '_').Select(t => (t.d, dist: CellDist(new string(chars), t.cell))).OrderBy(t => t.dist).First();
+                if (best.dist > DigitMatchMax) return null;
+                digits.Append(best.d);
+            }
+            return int.Parse(digits.ToString(), CultureInfo.InvariantCulture);
+        }
+
+        /// Reads a count from its glyph boxes with the shape templates: each glyph is placed in a cell aligned
+        /// to its own bottom-right corner, so the fixed cell positions no longer matter.
+        public static int? ReadCountFromGlyphs(Img band, IList<Rectangle> glyphs, IList<(char d, string cell)> templates)
+        {
+            if (glyphs.Count == 0) return null;
+            var digits = new StringBuilder();
+            foreach (var gl in glyphs)
+            {
+                var chars = new char[CW * CH];
+                int cx = gl.Right - CW + 1, cy = gl.Bottom - CH + 1;            // glyph's bottom-right in the cell's bottom-right
+                for (int y = 0; y < CH; y++) for (int x = 0; x < CW; x++) chars[y * CW + x] = DigitPx(band, cx + x, cy + y) ? '#' : '.';
+                string cell = new string(chars);
+                var best = templates.Where(t => t.d != '_').Select(t => (t.d, dist: CellDist(cell, t.cell))).OrderBy(t => t.dist).First();
+                if (best.dist > DigitMatchMax) return null;
+                digits.Append(best.d);
+            }
+            return int.Parse(digits.ToString(), CultureInfo.InvariantCulture);
+        }
+
         /// The strip of a slot where its stack count is drawn (image coordinates), for the text reader.
         public static Rectangle DigitBand(Grid g, int r, int c)
         {
             var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;
-            return new Rectangle(sx + (int)Math.Round(14 * s), sy + (int)Math.Round(42 * s), (int)Math.Round(60 * s), (int)Math.Round(28 * s));
+            // digits are drawn at slot y 46..63 (2560x1440); the icon's frame ends at ~45, so start just below it
+            return new Rectangle(sx + (int)Math.Round(14 * s), sy + (int)Math.Round(47 * s), (int)Math.Round(60 * s), (int)Math.Round(17 * s));
         }
 
         /// Maps text-reader words back to the digit bands they were cut from. Bands are stacked top to bottom in a
@@ -469,6 +642,8 @@ namespace CAHelper
             }
             return result;
         }
+
+        public static bool DigitPxPublic(Img img, int x, int y) => DigitPx(img, x, y);
 
         public static string Cell(Img img, Grid g, int r, int c, int i)
         {
@@ -503,22 +678,49 @@ namespace CAHelper
         }
         public const int DigitMatchMax = 21;   // same digit <= 16, closest different digits 26 on the test screenshot
 
-        /// Reads a stack count right to left. null = a glyph wasn't recognised (e.g. a 7 before it has been learned).
+        /// Reads a stack count from the slot's digit band: cells anchored on the last digit, matched by shape.
+        /// null = a cell didn't match any digit (e.g. an unlearned glyph); 1 = no count drawn (single item).
         public static int? ReadCount(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, List<string> cellsOut)
         {
-            var digits = new List<char>();
-            for (int i = 0; i < 5; i++)
+            var band = CropImg(img, DigitBand(g, r, c));
+            var cells = CountCells(band, g.Scale, templates);
+            if (cells.Count == 0) return CountGlyphs(band, g.Scale).Count == 0 ? 1 : (int?)null;
+            foreach (var cell in cells)
             {
-                string cell = Cell(img, g, r, c, i);
-                if (cell.Count(ch => ch == '#') < 6) break;                       // nothing here: number ended
-                var best = templates.Select(t => (t.d, dist: CellDist(cell, t.cell))).OrderBy(t => t.dist).First();
-                if (best.dist > DigitMatchMax) { cellsOut?.Add(cell); return null; }
-                if (best.d == '_') break;
-                cellsOut?.Add(cell);
-                digits.Insert(0, best.d);
+                var chars = new char[CW * CH];
+                for (int y = 0; y < CH; y++) for (int x = 0; x < CW; x++) chars[y * CW + x] = DigitPx(band, cell.X + x * cell.Width / CW, cell.Y + y * cell.Height / CH) ? '#' : '.';
+                cellsOut?.Add(new string(chars));
             }
-            if (digits.Count == 0) return 1;                                      // single item: no number shown
-            return int.Parse(new string(digits.ToArray()), CultureInfo.InvariantCulture);
+            return ReadCountFromCells(band, cells, templates);
+        }
+
+        /// The count region of a slot for the text reader: only the validated digit cells, as dark digits on white.
+        /// Returns null when the band holds no readable count. cellCount = how many digits the reader must return.
+        public static Img CountStrip(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, out int cellCount)
+        {
+            var band = CropImg(img, DigitBand(g, r, c));
+            var cells = CountCells(band, g.Scale, templates);
+            cellCount = cells.Count;
+            if (cells.Count == 0) return null;
+            var region = cells.Aggregate(Rectangle.Union);
+            region.Inflate(2, 2);
+            region = Rectangle.Intersect(region, new Rectangle(0, 0, band.W, band.H));
+            var px = new byte[region.Width * region.Height * 4];
+            for (int y = 0; y < region.Height; y++)
+                for (int x = 0; x < region.Width; x++)
+                {
+                    byte v = DigitPx(band, region.X + x, region.Y + y) ? (byte)0 : (byte)255;
+                    int i = (y * region.Width + x) * 4; px[i] = px[i + 1] = px[i + 2] = v; px[i + 3] = 255;
+                }
+            return new Img(region.Width, region.Height, px);
+        }
+
+        public static Img CropImg(Img im, Rectangle r)
+        {
+            r = Rectangle.Intersect(r, new Rectangle(0, 0, im.W, im.H));
+            var px = new byte[Math.Max(0, r.Width * r.Height * 4)];
+            for (int y = 0; y < r.Height; y++) Buffer.BlockCopy(im.Px, ((r.Y + y) * im.W + r.X) * 4, px, y * r.Width * 4, r.Width * 4);
+            return new Img(Math.Max(0, r.Width), Math.Max(0, r.Height), px);
         }
 
         public static List<SlotRead> ReadInventory(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, int cols = 8, int rows = 8)

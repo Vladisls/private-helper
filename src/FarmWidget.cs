@@ -67,6 +67,7 @@ namespace CAHelper
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot, busyInv; int stripSaves;
+        readonly Dictionary<string, int> lastCounts = new Dictionary<string, int>();
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
         readonly FarmCheck.CountSmoother smoother = new FarmCheck.CountSmoother();
@@ -182,7 +183,7 @@ namespace CAHelper
         {
             Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
             running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
-            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0;
+            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear();
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
             Render();
@@ -491,11 +492,16 @@ namespace CAHelper
                 // the shape matcher's value is the fallback for bands the reader can't read.
                 if (busyInv) return;
                 busyInv = true;
-                var copy = (Bitmap)bmp.Clone(); var gridNow = g; var slotsNow = slots;
+                var copy = (Bitmap)bmp.Clone(); var frameNow = (Bitmap)bmp.Clone(); var gridNow = g; var slotsNow = slots;
                 BeginInvoke((Action)(async () =>
                 {
                     int?[] ocr = null;
-                    try { ocr = await PartyOcr.ReadDigitBandsAsync(copy, slotsNow.Select(sl => FarmCheck.DigitBand(gridNow, sl.Row, sl.Col)).ToList()); }
+                    try
+                    {
+                        var imgNow = PartyOcr.ToImg(copy); var strips = new List<Img>(); var cellCounts = new List<int>();
+                        foreach (var sl in slotsNow) { strips.Add(FarmCheck.CountStrip(imgNow, gridNow, sl.Row, sl.Col, Digits, out int n)); cellCounts.Add(n); }
+                        ocr = await PartyOcr.ReadCountStripsAsync(strips, cellCounts);
+                    }
                     catch (Exception ex) { Debug("text reader failed on the counts: " + ex.Message, "ocrfail"); }
                     finally { copy.Dispose(); }
                     try
@@ -521,8 +527,17 @@ namespace CAHelper
                             if (merged.HasValue) { slotsNow[i].Count = merged; if (o.HasValue) slotsNow[i].Cells.Add("ocr"); }
                         }
                         if (ocr != null) Debug($"counts by text reader: {ocr.Count(v => v.HasValue)}/{slotsNow.Count} read, {agree} agree with shapes, {differ} differ" + (differ > 0 ? ": " + string.Join("; ", disagreements) : ""), "ocr:" + agree + "/" + differ + string.Join("", disagreements));
-                        // Keep the strips of reads where the two readers disagree, for diagnostics (last 5).
-                        if (differ > 0) { stripSaves = (stripSaves + 1) % 5; PartyOcr.SaveLastStrip(Path.Combine(Dir, $"cabal-helper-farm-digits-{stripSaves}.png")); }
+                        // Keep the strips of reads where the readers disagree or a count changed since the last read (last 5).
+                        bool changed = false;
+                        foreach (var sl in slotsNow)
+                            if (sl.Count.HasValue) { if (lastCounts.TryGetValue(sl.Item, out int prev) && prev != sl.Count.Value) changed = true; lastCounts[sl.Item] = sl.Count.Value; }
+                        if (differ > 0 || changed)
+                        {
+                            stripSaves = (stripSaves + 1) % 5;
+                            PartyOcr.SaveLastStrip(Path.Combine(Dir, $"cabal-helper-farm-digits-{stripSaves}.png"));
+                            try { frameNow.Save(Path.Combine(Dir, $"cabal-helper-farm-frame-{stripSaves}.png"), System.Drawing.Imaging.ImageFormat.Png); } catch { }
+                            Debug($"count strip saved as cabal-helper-farm-digits-{stripSaves}.png ({(differ > 0 ? "readers disagree" : "a count changed")}): " + string.Join(", ", slotsNow.Select(x => Short(x.Item) + "=" + (x.Count?.ToString() ?? "?"))));
+                        }
                         var counts = new Dictionary<string, int>();
                         foreach (var sl in slotsNow) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                         if (slotsNow.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
@@ -532,7 +547,7 @@ namespace CAHelper
                         if (readsSinceStart >= 2 || baseline != null) ApplyRead(stable, smoother.Gone());
                         ovSlots = slotsNow; Render();
                     }
-                    finally { busyInv = false; }
+                    finally { busyInv = false; frameNow.Dispose(); }
                 }));
             }
         }
