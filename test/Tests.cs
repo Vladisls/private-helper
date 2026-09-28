@@ -226,6 +226,23 @@ static class T {
         Console.WriteLine($"INFO tab strip: core tab vs itself (1 px shift) {same:0.0}, core tab vs tab I {other:0.0}, grid on tab-I shot {gt.X},{gt.Y} pitch {gt.PitchX:0.00}");
         Check(same < FarmCheck.TabMatchMax && other > FarmCheck.TabMatchMax, "tab check: core tab (VI) matches itself, tab I does not");
       }
+      var fl = System.IO.Path.Combine(dataDir, "live172.bin");
+      if (System.IO.File.Exists(fl)) {
+        var live = Load(fl);
+        // the helper drew its grid in pure green: take the grid from those lines
+        var gx = new List<int>(); var gy = new List<int>();
+        for (int x = 0; x < live.W; x++) { int n = 0; for (int y = 0; y < live.H; y++) { live.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) gx.Add(x); }
+        for (int y = 0; y < live.H; y++) { int n = 0; for (int x = 0; x < live.W; x++) { live.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) gy.Add(y); }
+        Console.WriteLine("INFO green lines x: " + string.Join(" ", gx) + " | y: " + string.Join(" ", gy));
+        var glb = new Grid { X = gx.First(), Y = gy.First(), PitchX = (gx.Last() - gx.First()) / 8.0, PitchY = (gy.Last() - gy.First()) / 8.0 };
+        var lr = FarmCheck.ReadInventory(live, glb, icons, digs);
+        Console.WriteLine("INFO live capture: grid " + $"{glb.X:0},{glb.Y:0} pitch {glb.PitchX:0.00}: " + string.Join(",", lr.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?"))));
+        var hi = lr.First(x => x.Item == "Upgrade Core (High)");
+        Check(hi.Count == 172, $"live capture: Upgrade Core (High) reads 172 with the new 7 (got {hi.Count?.ToString() ?? "?"})");
+        var seven = FarmCheck.Digits.First(d => d.d == '7').cell;
+        int nearestOther = FarmCheck.Digits.Where(d => d.d != '7' && d.d != '_').Min(d => FarmCheck.CellDist(seven, d.cell));
+        Check(nearestOther > FarmCheck.DigitMatchMax, $"7 doesn't clash with other digits (nearest other digit {nearestOther}, limit {FarmCheck.DigitMatchMax})");
+      }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
         var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459, 8, 8, FarmCheck.RefPitch * 0.75);

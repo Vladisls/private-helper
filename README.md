@@ -125,7 +125,7 @@ FARM TRACKER
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
-- A count shown as unreadable (e.g. a 7, which wasn't in the sample screenshot):
+- A count shown as unreadable (all digits 0-9 are built in now; other resolutions may need it):
   Areas & learning > Fix counts, type the real number once and the digit is learned.
 - After moving the inventory or changing resolution: set the inventory area again (a box around
   the whole inventory window is fine) and "Learn core icons from the open inventory". Learning

@@ -21,6 +21,7 @@ namespace CAHelper
         static string LogPath => Path.Combine(Dir, "cabal-helper-farm-log.csv");
         static string DebugPath => Path.Combine(Dir, "cabal-helper-farm-debug.txt");
         static string InvShotPath => Path.Combine(Dir, "cabal-helper-farm-inventory.png");
+        static string InvRawPath => Path.Combine(Dir, "cabal-helper-farm-inventory-raw.png");
         readonly List<string> debug = new List<string>();
         string lastDebugKey;
 
@@ -360,6 +361,7 @@ namespace CAHelper
         {
             try
             {
+                src.Save(InvRawPath, System.Drawing.Imaging.ImageFormat.Png);    // plain capture too, for checking icons later
                 using (var bmp = new Bitmap(src))
                 using (var gr = Graphics.FromImage(bmp))
                 using (var pen = new Pen(Color.Lime, 1))
