@@ -65,6 +65,7 @@ namespace CAHelper
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
         Grid? grid; Grid? readGrid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         string lastAnchorInfo, ovAnchor = ""; bool ovAnchorOk; FarmCheck.AnchorResult ovAnchorRes; Rectangle ovAnchorCap;
+        readonly Dictionary<(int r, int c), string> slotIdentity = new Dictionary<(int, int), string>();   // sticky icon identities per slot
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot, busyInv; int stripSaves;
@@ -186,7 +187,7 @@ namespace CAHelper
         {
             Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
             running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
-            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear();
+            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear(); slotIdentity.Clear();
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
             Render();
@@ -363,7 +364,7 @@ namespace CAHelper
                 {
                     string shown = stable != null && stable.TryGetValue(sl.Item, out int sv) ? sv.ToString() : (sl.Count?.ToString() ?? "?");
                     overlay.Tags.Add(new DebugOverlay.Note { P = new Point(gx + (int)(g.X + sl.Col * g.PitchX) + 2, gy + (int)(g.Y + sl.Row * g.PitchY) + 2),
-                        Text = Short(sl.Item) + " " + shown, C = sl.Count.HasValue ? Color.Yellow : Color.Red });
+                        Text = Short(sl.Item) + " " + shown + $" ·{sl.IconDist:0.0}", C = sl.Count.HasValue ? Color.Yellow : Color.Red });
                 }
                 if (ovTab != null)
                 {
@@ -526,8 +527,13 @@ namespace CAHelper
                 if (anchorInfo != lastAnchorInfo) { Debug("anchor: " + anchorInfo, "anchor"); lastAnchorInfo = anchorInfo; }
                 ovAnchor = anchorInfo; ovAnchorOk = anchorOk; ovAnchorRes = ares; ovAnchorCap = InvCapture;
                 var (g, slots) = anchorOk
-                    ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, Digits))       // pinned: no position search
+                    ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, Digits, 8, 8, slotIdentity))   // pinned: no position search, sticky identities
                     : FarmCheck.BestRead(img, grid.Value, icons, Digits, keep: readGrid);
+                if (anchorOk)
+                {
+                    foreach (var sl in slots) slotIdentity[(sl.Row, sl.Col)] = sl.Item;
+                    foreach (var k in slotIdentity.Keys.ToList()) if (!slots.Any(x => x.Row == k.r && x.Col == k.c)) slotIdentity.Remove(k);   // now empty / unknown
+                }
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
                 ovInvCap = InvCapture; ovGrid = g; ovSlots = slots; ovInv = $"open, {found} core types";

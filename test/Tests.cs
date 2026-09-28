@@ -379,6 +379,14 @@ static class T {
           Check(byBtn.HasValue && Math.Abs(byBtn.Value.X - anchored.X) <= 2 && Math.Abs(byBtn.Value.Y - anchored.Y) <= 2, $"{nm}: locating by the button alone finds the same grid");
         } else Check(okA && Math.Abs(anchored.X - 506) <= 2 && Math.Abs(anchored.Y - 158) <= 2, $"{nm}: anchored grid matches the frame snap 506,158 ({anchored.X:0},{anchored.Y:0})");
       }
+      // sticky identity: a slot keeps its core when the icon drifts past the strict limit but still resembles it
+      { var gS2 = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons(), digs);
+        var prior = gS2.slots.ToDictionary(x => (x.Row, x.Col), x => x.Item);
+        var strictIcons = FarmCheck.DefaultIcons().Where(t => t.name != "Force Core (Low)").Concat(new[]{ ("Force Core (Low)", FarmCheck.Icons.First(t => t.name == "Force Core (Low)").f) }).ToList();   // only the JPG sample: live FC Low sits ~2.0 away
+        var without = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons, digs);
+        var withPrior = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons, digs, 8, 8, prior);
+        Console.WriteLine($"STICKY without prior: {without.Count} slots, with prior: {withPrior.Count} slots");
+        Check(withPrior.Count >= without.Count && withPrior.Any(x => x.Item == "Force Core (Low)"), "a previously identified slot stays identified when its icon drifts"); }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642

@@ -723,7 +723,11 @@ namespace CAHelper
             return new Img(Math.Max(0, r.Width), Math.Max(0, r.Height), px);
         }
 
-        public static List<SlotRead> ReadInventory(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, int cols = 8, int rows = 8)
+        /// A slot keeps its last identity while its icon still roughly resembles it (the shine moves the colour mix a
+        /// little on every read); entering a new identity needs the strict match.
+        public const double IconStayMax = 2.2;
+
+        public static List<SlotRead> ReadInventory(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, int cols = 8, int rows = 8, IDictionary<(int r, int c), string> prior = null)
         {
             var list = new List<SlotRead>();
             for (int r = 0; r < rows; r++)
@@ -732,6 +736,11 @@ namespace CAHelper
                     var f = IconFeature(img, g, r, c);
                     double empty = Dist(f, EmptySlot);
                     var m = MatchIcon(f, icons);
+                    if (m == null && prior != null && prior.TryGetValue((r, c), out var kept))
+                    {
+                        double dKept = icons.Where(t => t.name == kept).Select(t => Dist(f, t.f)).DefaultIfEmpty(double.MaxValue).Min();
+                        if (dKept <= IconStayMax && dKept < empty) m = (kept, dKept);   // sticky: still looks like the same core
+                    }
                     if (m == null || empty < m.Value.d) continue;                   // empty slot, unknown item, or ambiguous
                     var best = m.Value;
                     var s = new SlotRead { Row = r, Col = c, Item = best.name, IconDist = best.d };
