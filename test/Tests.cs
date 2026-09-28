@@ -355,6 +355,14 @@ static class T {
         var strip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out int nCells);
         int darkPx = 0; for (int i = 0; i < strip.Px.Length; i += 4) if (strip.Px[i] == 0) darkPx++;
         Check(nCells == 3 && strip.W > 25 && strip.W < 40 && darkPx > 60, $"count strip for the reader: 3 cells, {strip.W}x{strip.H}, {darkPx} digit pixels, nothing else"); }
+      // hysteresis: the grid used last time is kept unless another position reads clearly better
+      { var g0 = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var first = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), digs);
+        var nudged = g0; nudged.X += 3; nudged.Y -= 2;                       // a slightly different snap on the next read
+        var again = FarmCheck.BestRead(inv, nudged, FarmCheck.DefaultIcons(), digs, keep: first.grid);
+        Check(again.grid.X == first.grid.X && again.grid.Y == first.grid.Y && again.slots.Count == 10, "grid is kept between reads when the new snap differs slightly");
+        var badKeep = first.grid; badKeep.X -= 8 * badKeep.Scale; badKeep.Y -= 8 * badKeep.Scale;   // a previously kept grid that reads badly
+        var fixedUp = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), digs, keep: badKeep);
+        Check(fixedUp.slots.Count(x => x.Cells.Count > 0) >= 9, "a kept grid that reads badly is replaced by a clearly better one"); }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642

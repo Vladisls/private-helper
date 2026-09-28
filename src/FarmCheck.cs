@@ -743,20 +743,35 @@ namespace CAHelper
 
         /// The slot frame has two bright lines ~8 px apart, so the snap can land on either one. Try the neighbours
         /// and keep the grid that reads best: most recognised cores, fewest unreadable counts, closest icons.
-        public static (Grid grid, List<SlotRead> slots) BestRead(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits)
+        /// Score of a read: recognised cores, counts that came from real digits, icon closeness.
+        public static double ReadScore(List<SlotRead> read)
+        {
+            int digitReads = read.Count(r => r.Count.HasValue && r.Cells.Count > 0);
+            return read.Count * 10 + digitReads * 8 - read.Sum(r => r.IconDist) - read.Count(r => r.Count == 1 && r.Cells.Count == 0) * 3;
+        }
+
+        /// The slot frame has two bright lines ~8 px apart, so the snap can land on either one. Try the neighbours
+        /// and keep the grid that reads best. With `keep` set (the grid used last time), that grid stays unless
+        /// another position reads clearly better (SwitchMargin), so the grid doesn't twitch between reads.
+        public const double SwitchMargin = 12;
+        public static (Grid grid, List<SlotRead> slots) BestRead(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, Grid? keep = null)
         {
             (Grid, List<SlotRead>, double) best = (g, new List<SlotRead>(), double.MinValue);
             double step = SlotInset * g.Scale;
+            var candidates = new List<Grid>();
+            if (keep is Grid k) candidates.Add(k);
             foreach (var dx in new[] { 0.0, -step, step })
                 foreach (var dy in new[] { 0.0, -step, step })
-                {
-                    var cand = g; cand.X += dx; cand.Y += dy;
-                    var read = ReadInventory(img, cand, icons, digits);
-                    // Only counts that came from real digits prove the grid is aligned; "1" means no digits were found.
-                    int digitReads = read.Count(r => r.Count.HasValue && r.Cells.Count > 0);
-                    double score = read.Count * 10 + digitReads * 8 - read.Sum(r => r.IconDist) - read.Count(r => r.Count == 1 && r.Cells.Count == 0) * 3;
-                    if (score > best.Item3) best = (cand, read, score);
-                }
+                { var cand = g; cand.X += dx; cand.Y += dy; candidates.Add(cand); }
+            double keepScore = double.MinValue; List<SlotRead> keepRead = null;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                var read = ReadInventory(img, candidates[i], icons, digits);
+                double score = ReadScore(read);
+                if (i == 0 && keep != null) { keepScore = score; keepRead = read; }
+                if (score > best.Item3) best = (candidates[i], read, score);
+            }
+            if (keep != null && keepRead != null && best.Item3 < keepScore + SwitchMargin) return (keep.Value, keepRead);
             return (best.Item1, best.Item2);
         }
 

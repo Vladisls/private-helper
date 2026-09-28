@@ -63,7 +63,7 @@ namespace CAHelper
         readonly Dictionary<string, int> rare = new Dictionary<string, int>();
         List<string> lastLoot; long lootPrint;
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
-        Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
+        Grid? grid; Grid? readGrid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot, busyInv; int stripSaves;
@@ -163,7 +163,7 @@ namespace CAHelper
             if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons, digits and core tab are forgotten. The farm log is kept.",
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
-            icons = FarmCheck.DefaultIcons(); extraDigits.Clear(); coreTab = null; grid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
+            icons = FarmCheck.DefaultIcons(); extraDigits.Clear(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
             Debug("RESET: areas back to defaults, learned icons/digits/core tab forgotten");
             Render();
@@ -450,7 +450,7 @@ namespace CAHelper
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
                 double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
-                var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits);
+                var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits, keep: readGrid);
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
                 ovInvCap = InvCapture; ovGrid = g; ovSlots = slots; ovInv = $"open, {found} core types";
@@ -478,7 +478,7 @@ namespace CAHelper
                     {
                         // Nothing recognised: the grid may be the wrong one (e.g. a lookalike pattern). Search again next time,
                         // and look for the inventory's title on screen while waiting for counts.
-                        grid = null;
+                        grid = null; readGrid = null;
                         if (baseline == null || finishing) TryLocateInventory(now);
                     }
                     return;
@@ -487,7 +487,9 @@ namespace CAHelper
                 if (slotSize == null || Math.Abs(slotSize.Value - g.PitchX) > 0.5) { slotSize = g.PitchX; SaveConfig(); Debug($"slot size {g.PitchX:0.0} px saved (read recognised {found} core types)"); }
                 if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
                 Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col}={(x.Count?.ToString() ?? "?")} (icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.Count)));
-                grid = g; lastInvImg = img; lastSlots = slots;
+                if (readGrid == null || Math.Abs(readGrid.Value.X - g.X) > 0.5 || Math.Abs(readGrid.Value.Y - g.Y) > 0.5)
+                    Debug($"read grid {(readGrid == null ? "set" : "moved")} to {g.X:0},{g.Y:0} (slot {g.PitchX:0.0} px)");
+                readGrid = g; lastInvImg = img; lastSlots = slots;
                 // Counts: the text reader is primary (it doesn't depend on digit shapes or the icon shine);
                 // the shape matcher's value is the fallback for bands the reader can't read.
                 if (busyInv) return;
