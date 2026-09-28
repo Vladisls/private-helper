@@ -127,7 +127,9 @@ FARM TRACKER
   Everything is written to cabal-helper-farm-log.csv next to the exe.
 - A count shown as unreadable (all digits 0-9 are built in now; other resolutions may need it):
   Areas & learning > Fix counts, type the real number once and the digit is learned.
-- After moving the inventory or changing resolution: set the inventory area again (a box around
+- The inventory doesn't have to be where the area says: while waiting for core counts the
+  tracker searches the whole screen every 3 s and moves the area to the inventory it finds.
+- After changing resolution: set the inventory area again (a box around
   the whole inventory window is fine) and "Learn core icons from the open inventory". Learning
   checks itself and keeps the old icons if it doesn't work.
 - Something off? Areas & learning > Diagnostics shows what the tracker decided (text log) and

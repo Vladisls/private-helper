@@ -205,6 +205,12 @@ static class T {
         var gotw = string.Join(",", FarmCheck.BestRead(inv, gw, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
         Check(gotw == expect && Math.Abs(gw.X - 1919) <= 3 && Math.Abs(gw.Y - 253) <= 3, $"inventory read from a whole-window box {bx},{by},{bw}x{bh}: grid {gw.X:0},{gw.Y:0} pitch {gw.PitchX:0.00}");
       }
+      // search the whole screen, as after a reset when the saved area is wrong
+      var sw = System.Diagnostics.Stopwatch.StartNew();
+      var found = FarmCheck.LocateInventory(inv); long ms = sw.ElapsedMilliseconds;
+      var none1 = FarmCheck.LocateInventory(end); var none2 = FarmCheck.LocateInventory(tmr);
+      Console.WriteLine($"INFO locate: inventory shot -> {(found.HasValue ? $"{found.Value.X:0},{found.Value.Y:0} weakest {FarmCheck.WeakestLine(inv, found.Value):0.0}" : "none")} in {ms} ms; end shot -> {(none1.HasValue ? "FOUND" : "none")}; timer shot -> {(none2.HasValue ? "FOUND" : "none")}");
+      Check(found.HasValue && Math.Abs(found.Value.X - 1919) <= 3 && Math.Abs(found.Value.Y - 253) <= 3 && !none1.HasValue && !none2.HasValue, "whole-screen search finds the inventory, and nothing when it's closed");
       var gi = FarmCheck.FindGrid(inv, 1912, 248, 612, 612);
       Check(FarmCheck.InventoryOpen(inv, gi) && !FarmCheck.InventoryOpen(end, gi) && !FarmCheck.InventoryOpen(tmr, gi), "inventory-open check: yes on the inventory shot, no on the others");
       Check(FarmCheck.EndWindowLikely(Crop(end, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(tmr, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(inv, 209, 284, 630, 745)),

@@ -53,6 +53,7 @@ namespace CAHelper
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
         Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
+        DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot;
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
@@ -248,6 +249,24 @@ namespace CAHelper
             }
         }
 
+        /// Searches the whole screen for the inventory grid (every 3 s at most, only while waiting for counts),
+        /// so it works after a reset or after moving the inventory window without setting the area again.
+        void TryLocateInventory(DateTime now)
+        {
+            if ((now - lastLocate).TotalSeconds < 3) return;
+            lastLocate = now;
+            var screen = new Rectangle(0, 0, PartyOcr.PhysicalScreenWidth(), PartyOcr.PhysicalScreenHeight());
+            using (var bmp = PartyOcr.Capture(screen))
+            {
+                var found = FarmCheck.LocateInventory(PartyOcr.ToImg(bmp), ExpectedPitch);
+                if (found == null) { Debug("searched the whole screen: no inventory grid visible", "locate-none"); return; }
+                var g = found.Value; int m = (int)Math.Round(g.PitchX * 0.2);
+                invArea = new Rectangle((int)g.X - m, (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
+                grid = null; lastInvRead = DateTime.MinValue; SaveConfig();
+                Debug($"found the inventory elsewhere on screen: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}");
+            }
+        }
+
         /// The inventory area plus the tab strip above it (so the active tab can be checked).
         int TabMargin => (int)Math.Round(70 * invArea.Height / 614.0);
         Rectangle InvCapture => new Rectangle(invArea.X, Math.Max(0, invArea.Y - TabMargin), invArea.Width, invArea.Height + Math.Min(invArea.Y, TabMargin));
@@ -262,10 +281,20 @@ namespace CAHelper
                 if (grid == null)
                 {
                     var g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, ExpectedPitch);
-                    if (!FarmCheck.InventoryOpen(img, g0)) { invOpenSince = DateTime.MinValue; Debug($"inventory not open (grid contrast {g0.Score:0.00}, needs 1.70)", "closed"); return; }
+                    if (!FarmCheck.InventoryOpen(img, g0))
+                    {
+                        invOpenSince = DateTime.MinValue; Debug($"inventory not open in its area (grid contrast {g0.Score:0.00}, needs 1.70)", "closed");
+                        if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
+                        return;
+                    }
                     grid = g0; Debug($"grid found at {g0.X:0},{g0.Y:0} in the capture, slot {g0.PitchX:0.0}x{g0.PitchY:0.0} px, contrast {g0.Score:0.00}");
                 }
-                if (!FarmCheck.InventoryOpen(img, grid.Value)) { invOpenSince = DateTime.MinValue; Debug("inventory closed", "closed"); return; }
+                if (!FarmCheck.InventoryOpen(img, grid.Value))
+                {
+                    invOpenSince = DateTime.MinValue; Debug("inventory closed (or moved)", "closed");
+                    if (baseline == null || finishing) TryLocateInventory(now);
+                    return;
+                }
                 if (invOpenSince == DateTime.MinValue) invOpenSince = now;
                 if ((now - invOpenSince).TotalSeconds < 0.5 || (now - lastInvRead).TotalSeconds < 1) return;   // open for 0.5 s, read once a second
                 lastInvRead = now;
@@ -394,7 +423,14 @@ namespace CAHelper
             {
                 var img = PartyOcr.ToImg(bmp);
                 var g = FarmCheck.FindGrid(img, 0, img.H - invArea.Height, img.W, invArea.Height, 8, 8, ExpectedPitch);
-                if (!FarmCheck.InventoryOpen(img, g)) { Debug($"learn icons: inventory not found (grid contrast {g.Score:0.00})"); MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return; }
+                if (!FarmCheck.InventoryOpen(img, g))
+                {
+                    lastLocate = DateTime.MinValue; TryLocateInventory(DateTime.Now);
+                    if (grid == null && invArea != Rectangle.Empty && lastInvRead == DateTime.MinValue && debug.LastOrDefault()?.Contains("found the inventory") == true)
+                    { MessageBox.Show("Found the inventory at a new spot. Press Learn core icons once more.", "Farm Tracker"); return; }
+                    Debug($"learn icons: inventory not found (grid contrast {g.Score:0.00})");
+                    MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return;
+                }
                 g = FarmCheck.BestRead(img, g, icons, Digits).grid;
                 // same layout as taught: top row Upgrade Cores highest -> lowest, bottom row Force Cores
                 var learned = new List<(string, double[])>();

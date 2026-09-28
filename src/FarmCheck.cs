@@ -187,6 +187,17 @@ namespace CAHelper
             return n;
         }
 
+        /// Looks for the 8x8 inventory grid anywhere on the screen (used when the saved area doesn't show it).
+        /// Returns null when there's no convincing grid.
+        public static Grid? LocateInventory(Img screen, double expectedPitch = RefPitch)
+        {
+            var g = FindGrid(screen, 0, 0, screen.W, screen.H, 8, 8, expectedPitch);
+            if (!InventoryOpen(screen, g)) return null;
+            if (WeakestLine(screen, g) < MinWeakestLine) return null;
+            return g;
+        }
+        public const double MinWeakestLine = 8.0;
+
         /// Brightness on border lines vs just inside the slots. Inventory open ~2.2, anything else ~1.3.
         public static double BorderContrast(Img img, Grid g, int cols = 8, int rows = 8)
         {

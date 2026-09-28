@@ -38,6 +38,7 @@ namespace CAHelper
         [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
         /// Real screen height in pixels, even with Windows display scaling on.
         public static int PhysicalScreenHeight() { using (new DpiAware()) return GetSystemMetrics(1); }
+        public static int PhysicalScreenWidth() { using (new DpiAware()) return GetSystemMetrics(0); }
 
         public static Bitmap Capture(Rectangle area)
         {
