@@ -116,12 +116,14 @@ FARM TRACKER
   * open the core tab for about a second at the start and at the end: the core stacks are
     read and the gains shown (and per hour after 5 minutes);
   * rare drops (Jewel, Slot Extender, Potion of Luck, Stone) are picked up from the loot feed.
-- Stop session writes everything to cabal-helper-farm-log.csv next to the exe.
+- Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
+  and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
+  Everything is written to cabal-helper-farm-log.csv next to the exe.
 - A count shown as unreadable (e.g. a 7, which wasn't in the sample screenshot):
   Areas & learning > Fix counts, type the real number once and the digit is learned.
 - After moving the inventory or changing resolution: set the inventory area again and
   "Learn core icons from the open inventory".
-- While a session runs it checks three small screen areas once a second; reading text
+- While a session runs it checks three small screen areas twice a second; reading text
   only happens when something changed, so the CPU cost is tiny. It never touches the game.
 - Loot-feed counting is best effort: identical lines in a row can't be told apart and a big
   chest can scroll past, which is why cores are counted from the inventory instead.

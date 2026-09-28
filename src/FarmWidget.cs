@@ -27,7 +27,8 @@ namespace CAHelper
         List<string> rareWords = new List<string> { "Jewel", "Slot Extender", "Potion of Luck", "Stone" };
 
         // session
-        bool running; DateTime started; DateTime lastCheck = DateTime.MinValue;
+        bool running, finishing; DateTime started, finishStarted; DateTime lastCheck = DateTime.MinValue;
+        const int FreshCountsSeconds = 10, FinishTimeoutSeconds = 90;
         readonly List<(DateTime at, FarmCheck.RunResult run)> runs = new List<(DateTime, FarmCheck.RunResult)>();
         Dictionary<string, int> baseline, current;
         readonly Dictionary<string, int> rare = new Dictionary<string, int>();
@@ -48,7 +49,7 @@ namespace CAHelper
             Content.Padding = new Padding(10, 6, 8, 4);
             startStop.Dock = DockStyle.Top; startStop.Height = 30;
             Content.Controls.Add(body); Content.Controls.Add(footer); Content.Controls.Add(startStop); Content.Controls.Add(status);
-            startStop.Click += (s, e) => { Touch(); if (running) StopSession(); else StartSession(); };
+            startStop.Click += (s, e) => { Touch(); if (!running) StartSession(); else if (finishing) StopSession(); else RequestStop(); };
             footer.Click += (s, e) => { Touch(); Menu2().Show(footer, new Point(0, footer.Height)); };
             Load += (s, e) => { LoadConfig(); Render(); };
             MakeDraggable(status);
@@ -115,9 +116,20 @@ namespace CAHelper
             startStop.Text = "Stop session"; Render();
         }
 
+        /// Before stopping, make sure the final core counts are recent: if the core tab wasn't read in the last
+        /// few seconds, ask for it and stop as soon as it has been read (or on "Stop now" / after 90 s).
+        void RequestStop()
+        {
+            if (baseline == null || (DateTime.Now - lastInvRead).TotalSeconds <= FreshCountsSeconds) { StopSession(); return; }
+            finishing = true; finishStarted = DateTime.Now;
+            startStop.Text = "Stop now (skip final counts)";
+            if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
+            Render();
+        }
+
         void StopSession()
         {
-            running = false; startStop.Text = "Start session";
+            running = false; finishing = false; startStop.Text = "Start session";
             WriteLog(); Render();
         }
 
@@ -151,9 +163,15 @@ namespace CAHelper
         // ---------- once a second ----------
         public override AlertState Tick(DateTime now, TimeSpan idle, bool gameFocused, Settings s, bool blinkOn)
         {
-            if (!running || (now - lastCheck).TotalMilliseconds < 1000) return default;
+            if (!running || (now - lastCheck).TotalMilliseconds < 500) return default;
             lastCheck = now;
-            try { CheckEnd(now); CheckInventory(now); CheckLoot(); }
+            try
+            {
+                CheckEnd(now); CheckInventory(now);
+                if (!running) return default;                                     // stopped by the final inventory read
+                CheckLoot();
+                if (finishing && (now - finishStarted).TotalSeconds >= FinishTimeoutSeconds) { StopSession(); return default; }
+            }
             catch (Exception ex) { Warn("⚠ " + ex.Message); }
             Render();
             return default;
@@ -192,7 +210,7 @@ namespace CAHelper
                 if (grid == null) { var g0 = FarmCheck.FindGrid(img, 0, 0, img.W, img.H); if (!FarmCheck.InventoryOpen(img, g0)) { invOpenSince = DateTime.MinValue; return; } grid = g0; }
                 if (!FarmCheck.InventoryOpen(img, grid.Value)) { invOpenSince = DateTime.MinValue; return; }
                 if (invOpenSince == DateTime.MinValue) invOpenSince = now;
-                if ((now - invOpenSince).TotalSeconds < 1 || (now - lastInvRead).TotalSeconds < 2) return;   // open for 1 s, read every 2 s
+                if ((now - invOpenSince).TotalSeconds < 0.5 || (now - lastInvRead).TotalSeconds < 1) return;   // open for 0.5 s, read once a second
                 lastInvRead = now;
                 var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits);
                 if (slots.Count == 0) return;                                      // another tab: no cores here
@@ -201,6 +219,7 @@ namespace CAHelper
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                 if (slots.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
                 if (baseline == null) baseline = counts; else current = counts;
+                if (finishing) { StopSession(); return; }
             }
         }
 
@@ -282,6 +301,8 @@ namespace CAHelper
             if (status.Text != st) status.Text = st;
             var lines = new List<Ui.Line>();
             void Line(string t, Color col, bool bold = false) => lines.Add(new Ui.Line(t, col, bold));
+            if (finishing)
+                Line($"Open the core tab for a moment to save the final counts. Stops by itself once read ({Math.Max(0, FinishTimeoutSeconds - (int)(DateTime.Now - finishStarted).TotalSeconds)} s).", Color.FromArgb(245, 196, 81), true);
 
             if (runs.Count > 0)
             {
