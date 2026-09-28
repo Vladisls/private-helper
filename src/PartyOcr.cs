@@ -153,10 +153,20 @@ namespace CAHelper
         /// Reads the text lines of a bitmap (enlarged first for small fonts).
         public static async Task<List<string>> ReadLinesAsync(Bitmap bmp, int enlarge = 2)
         {
+            var lines = new List<string>();
+            foreach (var line in await ReadWordsAsync(bmp, enlarge)) lines.Add(string.Join(" ", line.ConvertAll(w => w.Text)));
+            return lines;
+        }
+
+        /// Reads the text of a bitmap as lines of words, each with its box in the bitmap's own pixels
+        /// (the enlargement is divided back out).
+        public static async Task<List<List<OcrWord>>> ReadWordsAsync(Bitmap bmp, int enlarge = 2)
+        {
             var engine = CreateEngine();
             if (engine == null) throw new InvalidOperationException("Windows has no text-recognition language installed (add English in Settings > Time & language > Language).");
             byte[] png;
-            using (var big = Enlarge(bmp, enlarge)) png = Png(big);
+            if (enlarge > 1) using (var big = Enlarge(bmp, enlarge)) png = Png(big);
+            else png = Png(bmp);
             using (var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream())
             {
                 await ras.WriteAsync(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(png));
@@ -165,11 +175,37 @@ namespace CAHelper
                 using (var sb = await decoder.GetSoftwareBitmapAsync(Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8, Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied))
                 {
                     var result = await engine.RecognizeAsync(sb);
-                    var lines = new List<string>();
-                    foreach (var line in result.Lines) lines.Add(line.Text);
+                    var lines = new List<List<OcrWord>>();
+                    double f = Math.Max(1, enlarge);
+                    foreach (var line in result.Lines)
+                    {
+                        var words = new List<OcrWord>();
+                        foreach (var w in line.Words)
+                        {
+                            var b = w.BoundingRect;
+                            words.Add(new OcrWord(w.Text, b.X / f, b.Y / f, b.Width / f, b.Height / f));
+                        }
+                        lines.Add(words);
+                    }
                     return lines;
                 }
             }
+        }
+
+        /// Reads a bitmap of any size (e.g. all monitors together): the text reader only takes images up to
+        /// OcrEngine.MaxImageDimension, so it is read in overlapping pieces. Word boxes are in the bitmap's pixels.
+        public static async Task<List<List<OcrWord>>> ReadWordsTiledAsync(Bitmap bmp)
+        {
+            int max = (int)Math.Min(4096u, Windows.Media.Ocr.OcrEngine.MaxImageDimension);
+            var all = new List<List<OcrWord>>();
+            foreach (var (x, y, w, h) in FarmCheck.Tiles(bmp.Width, bmp.Height, max, 200))
+            {
+                List<List<OcrWord>> lines;
+                if (x == 0 && y == 0 && w == bmp.Width && h == bmp.Height) lines = await ReadWordsAsync(bmp, 1);
+                else using (var tile = bmp.Clone(new Rectangle(x, y, w, h), PixelFormat.Format32bppArgb)) lines = await ReadWordsAsync(tile, 1);
+                foreach (var line in lines) all.Add(line.ConvertAll(o => new OcrWord(o.Text, o.X + x, o.Y + y, o.W, o.H)));
+            }
+            return all;
         }
 
         /// Copies a bitmap's pixels into the platform-neutral Img the farm logic works on.

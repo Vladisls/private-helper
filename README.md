@@ -109,8 +109,9 @@ ALARMS
 
 FARM TRACKER
 - Put your cores on the last inventory tab with autosort off (top row Upgrade Cores
-  Ultimate -> Low, bottom row Force Cores Ultimate -> Low). The default areas fit a
-  2560x1440 screen; on another resolution use "Areas & learning" to set them.
+  Ultimate -> Low, bottom row Force Cores Ultimate -> Low). The inventory is found by itself
+  (see below); the end-window and loot-feed areas default to a 2560x1440 game, on another
+  resolution set them in "Areas & learning".
 - Start session, then play as usual:
   * every "Quest Dungeon Cleared!" window counts a run, with its time, dungeon and DP;
   * open the core tab for about a second at the start (a yellow prompt asks for it) and at
@@ -119,7 +120,8 @@ FARM TRACKER
 - The core tab is remembered automatically (the tab strip above the grid) on the first read
   that finds your cores; other tabs are ignored. Reads that find fewer than half of your
   cores are ignored too.
-- Cores are found by their icon wherever they sit (stacks of the same core are added up).
+- Cores are recognised by their colour mix (built in from live captures; the icon shine only
+  moves it a little, other cores are clearly further away), wherever they sit (stacks of the same core are added up).
   If a core isn't found, the panel asks: at the start "You have none of these?", at the end
   "Used them all?". Yes counts it as 0; Read again retries (e.g. wrong tab).
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
@@ -128,13 +130,22 @@ FARM TRACKER
 - A count shown as unreadable (all digits 0-9 are built in now; other resolutions may need it):
   Areas & learning > Fix counts, type the real number once and the digit is learned.
 - The inventory doesn't have to be where the area says: while waiting for core counts the
-  tracker searches the whole screen every 3 s and moves the area to the inventory it finds.
-- After changing resolution: set the inventory area again (a box around
-  the whole inventory window is fine) and "Learn core icons from the open inventory". Learning
-  checks itself and keeps the old icons if it doesn't work.
+  tracker looks at all monitors every 3 s. It reads the screen text for the window title
+  "Inventory" and searches the slot grid just below it (slot size from the title's text size);
+  if no title is read, it searches the grid pattern on the whole picture. The area moves to the
+  inventory it finds. Nothing is guessed from the desktop resolution, so the game can run at
+  another size than the desktop or on another monitor.
+- The slot size is learned from the first read that recognises your cores and saved
+  (slot=... in cabal-helper-farm.txt); later searches look near that size first.
+- If the inventory seems closed where it was last seen, the area is searched again before
+  the tracker says "closed" (it may have moved a little, or the old grid was wrong).
+- After changing resolution: if the cores aren't recognised, "Learn core icons from the open
+  inventory" (Set inventory area still works as a manual override). Learning checks itself
+  and keeps the old icons if it doesn't work.
 - Debug checkbox (Farm Tracker title bar): draws on screen what the tracker sees - inventory
-  area and detected grid with each slot's result, the tab check, the end-window area (seen /
-  run counted) and the loot-feed area with the last new line. Works before a session too.
+  area (and how it was found: title text, band search or saved area) and detected grid with
+  each slot's result, the tab check, the end-window area (seen / run counted) and the
+  loot-feed area with the last new line. Works before a session too.
 - Something off? Areas & learning > Diagnostics shows what the tracker decided (text log) and
   the last inventory read as a picture with the grid and each slot's result drawn on it.
   "Reset areas and everything learned" starts over.

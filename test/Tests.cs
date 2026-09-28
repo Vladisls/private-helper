@@ -211,6 +211,25 @@ static class T {
       var none1 = FarmCheck.LocateInventory(end); var none2 = FarmCheck.LocateInventory(tmr);
       Console.WriteLine($"INFO locate: inventory shot -> {(found.HasValue ? $"{found.Value.X:0},{found.Value.Y:0} weakest {FarmCheck.WeakestLine(inv, found.Value):0.0}" : "none")} in {ms} ms; end shot -> {(none1.HasValue ? "FOUND" : "none")}; timer shot -> {(none2.HasValue ? "FOUND" : "none")}");
       Check(found.HasValue && Math.Abs(found.Value.X - 1919) <= 3 && Math.Abs(found.Value.Y - 253) <= 3 && !none1.HasValue && !none2.HasValue, "whole-screen search finds the inventory, and nothing when it's closed");
+      // find the inventory by its "Inventory" title (the box the text reader would return; its height varies)
+      foreach (var (tx,ty,tw,th) in new[]{ (2162.0,147.0,129.0,29.0), (2162.0,147.0,129.0,21.0), (2170.0,158.0,110.0,23.0) }) {
+        var title = new OcrWord("Inventory", tx, ty, tw, th);
+        var gtl = FarmCheck.FindGridBelowTitle(inv, title);
+        Check(gtl.HasValue && Math.Abs(gtl.Value.X - 1919) <= 3 && Math.Abs(gtl.Value.Y - 253) <= 3 && Math.Abs(gtl.Value.PitchX - 76.9) < 1 && Math.Abs(gtl.Value.PitchY - 76.9) < 1
+              && !FarmCheck.FindGridBelowTitle(end, title).HasValue && !FarmCheck.FindGridBelowTitle(tmr, title).HasValue,
+              $"grid found below a {tw}x{th} title at {tx},{ty}: {(gtl.HasValue ? $"{gtl.Value.X:0},{gtl.Value.Y:0} pitch {gtl.Value.PitchX:0.00}" : "none")}; nothing on the closed shots");
+      }
+      // a wrong cached grid is searched again instead of reporting "closed"
+      var right = FarmCheck.FindGrid(inv, 1905, 240, 620, 615);
+      int searches = 0;
+      var keep = FarmCheck.CurrentGrid(inv, right, () => { searches++; return right; }, out bool rep1);
+      var wrong = new Grid{ X = 1880, Y = 300, PitchX = 68, PitchY = 68 };
+      var fixedG = FarmCheck.CurrentGrid(inv, wrong, () => FarmCheck.FindGridNear(inv, 1905, 240, 620, 615, 68), out bool rep2);
+      var closedG = FarmCheck.CurrentGrid(end, right, () => FarmCheck.FindGridNear(end, 1905, 240, 620, 615, 76.9), out bool rep3);
+      Check(keep.HasValue && searches == 0 && !rep1, "cached grid still open: kept, no new search");
+      Check(fixedG.HasValue && rep2 && Math.Abs(fixedG.Value.X - 1919) <= 3 && Math.Abs(fixedG.Value.Y - 253) <= 3 && Math.Abs(fixedG.Value.PitchX - 76.9) < 1,
+            $"wrong cached grid (68 px): searched again and replaced ({(fixedG.HasValue ? $"{fixedG.Value.X:0},{fixedG.Value.Y:0} pitch {fixedG.Value.PitchX:0.00}" : "none")})");
+      Check(!closedG.HasValue && !rep3, "cached grid on a closed inventory: closed after searching again");
       var gi = FarmCheck.FindGrid(inv, 1912, 248, 612, 612);
       Check(FarmCheck.InventoryOpen(inv, gi) && !FarmCheck.InventoryOpen(end, gi) && !FarmCheck.InventoryOpen(tmr, gi), "inventory-open check: yes on the inventory shot, no on the others");
       Check(FarmCheck.EndWindowLikely(Crop(end, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(tmr, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(inv, 209, 284, 630, 745)),
@@ -266,13 +285,59 @@ static class T {
         {
         }
       }
+      var fmis = System.IO.Path.Combine(dataDir, "mis.bin");
+      if (System.IO.File.Exists(fmis)) {
+        var mi = Load(fmis);
+        foreach (var ep in new[]{ 0.0 }) {
+          var gm = FarmCheck.FindGrid(mi, 815, 160, 620, 620, 8, 8, ep);
+          var rm = FarmCheck.BestRead(mi, gm, FarmCheck.DefaultIcons(), digs);
+          Check(Math.Abs(gm.PitchX - 76.9) < 1 && Math.Abs(gm.X - 820) <= 3 && Math.Abs(gm.Y - 166) <= 3, "live screenshot: grid found without a resolution guess");
+          Console.WriteLine($"MIS expected {ep}: grid {gm.X:0},{gm.Y:0} pitch {gm.PitchX:0.00}x{gm.PitchY:0.00} contrast {gm.Score:0.00} weakest {FarmCheck.WeakestLine(mi, gm):0.0} -> " + string.Join(",", rm.slots.Select(x => FarmCheck.Icons.First(t => t.name == x.Item).name.Replace("Upgrade Core","UC").Replace("Force Core","FC") + "=" + (x.Count?.ToString() ?? "?"))));
+        }
+      }
+      // Shine / similarity study on the two live captures (all icons clean on mis.bin, FC Medium+Low clean on livefc.bin)
+      if (System.IO.File.Exists(fmis) && System.IO.File.Exists(ffc)) {
+        var mi2 = Load(fmis); var gm2 = FarmCheck.FindGrid(mi2, 815, 160, 620, 620);
+        var names = FarmCheck.Icons.Select(t => t.name).ToList();
+        var live = new List<(string name, double[] f)>();
+        for (int i = 0; i < 10; i++) live.Add((names[i], FarmCheck.IconFeature(mi2, gm2, i / 5, i % 5)));
+        var lv2 = Load(ffc); var lx2 = new List<int>(); var ly2 = new List<int>();
+        for (int x = 0; x < lv2.W; x++) { int n = 0; for (int y = 0; y < lv2.H; y++) { lv2.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) lx2.Add(x); }
+        for (int y = 0; y < lv2.H; y++) { int n = 0; for (int x = 0; x < lv2.W; x++) { lv2.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) ly2.Add(y); }
+        var lg2 = new Grid { X = lx2.First(), Y = ly2.First(), PitchX = (lx2.Last() - lx2.First()) / 8.0, PitchY = (ly2.Last() - ly2.First()) / 8.0 };
+        double shineMed = FarmCheck.Dist(live[8].f, FarmCheck.IconFeature(lv2, lg2, 1, 3)), shineLow = FarmCheck.Dist(live[9].f, FarmCheck.IconFeature(lv2, lg2, 1, 4));
+        Console.WriteLine($"STUDY same icon, two live moments: FC Medium {shineMed:0.00}, FC Low {shineLow:0.00}");
+        Console.WriteLine($"STUDY live vs JPG template, same core: " + string.Join(", ", live.Select((l, i) => $"{l.name.Replace("Upgrade Core","UC").Replace("Force Core","FC")} {FarmCheck.Dist(l.f, FarmCheck.Icons[i].f):0.00}")));
+        double minDiff = 99; string pair = "";
+        for (int i = 0; i < 10; i++) for (int j = i + 1; j < 10; j++) { double d = FarmCheck.Dist(live[i].f, live[j].f); if (d < minDiff) { minDiff = d; pair = live[i].name + " vs " + live[j].name; } }
+        Console.WriteLine($"STUDY closest two different cores (live): {minDiff:0.00} ({pair}); UC Ult vs UC Highest {FarmCheck.Dist(live[0].f, live[1].f):0.00}; FC Ult vs FC Highest {FarmCheck.Dist(live[5].f, live[6].f):0.00}; UC Ult vs FC Ult {FarmCheck.Dist(live[0].f, live[5].f):0.00}; UC Highest vs FC Highest {FarmCheck.Dist(live[1].f, live[6].f):0.00}");
+        var liveRead2 = FarmCheck.BestRead(mi2, gm2, FarmCheck.DefaultIcons(), digs).slots;
+        string gotLive = string.Join(",", liveRead2.OrderBy(x => x.Row * 8 + x.Col).Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
+        Check(gotLive == "Upgrade Core (Ultimate)=3,Upgrade Core (Highest)=223,Upgrade Core (High)=172,Upgrade Core (Medium)=14,Upgrade Core (Low)=9,Force Core (Ultimate)=5,Force Core (Highest)=34,Force Core (High)=158,Force Core (Medium)=16,Force Core (Low)=2",
+              "live Debug capture: all 10 cores and counts with the default icons -> " + gotLive);
+        foreach (var l in live) { var m = FarmCheck.MatchIcon(l.f, FarmCheck.DefaultIcons()); Check(m != null && m.Value.name == l.name && m.Value.d < 0.01, "live icon matches its own core unambiguously: " + l.name); }
+      }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
-        var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459, 8, 8, FarmCheck.RefPitch * 0.75);
+        var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459);
         var got2 = string.Join(",", FarmCheck.BestRead(small, g2, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
         Console.WriteLine($"INFO 1920x1080 (resized screenshot): grid pitch {g2.PitchX:0.00} -> {got2}");
+        Console.WriteLine($"INFO 1080p-sized (resized, blurry) inventory: pitch {g2.PitchX:0.00} at {g2.X:0},{g2.Y:0} (true grid at 1439,190)");
       }
     } else Console.WriteLine("SKIP farm screenshot tests (no test/data)");
+    // ---- Farm Tracker: title text, OCR tiles, saved slot size ----
+    Check(new[]{ "Inventory", "lnventory", "INVENTORY", "Inventorv", "|nventory", "Inventory:" }.All(FarmCheck.IsInventoryTitle)
+          && !new[]{ "Warehouse", "Invite", "Event", "Inventory Full Warning", "" }.Any(FarmCheck.IsInventoryTitle), "\"Inventory\" title recognised with reader noise, other words not");
+    var tl = FarmCheck.InventoryTitles(new List<IList<OcrWord>>{
+      new List<OcrWord>{ new OcrWord("Obtain", 10, 10, 50, 12), new OcrWord("Inventory", 70, 10, 60, 12) },
+      new List<OcrWord>{ new OcrWord("Inven", 200, 300, 40, 20), new OcrWord("tory", 244, 301, 30, 20) },
+      new List<OcrWord>{ new OcrWord("Character", 500, 50, 80, 20) } });
+    Check(tl.Count == 2 && tl[0].X == 70 && tl[1].X == 200 && tl[1].W == 74 && tl[1].H == 21, "title boxes: the word itself, or a split word joined");
+    var tiles = FarmCheck.Tiles(5120, 1440, 2600, 200);
+    Check(FarmCheck.Tiles(2560, 1440, 2600, 200).Count == 1 && tiles.All(t => t.w <= 2600 && t.h <= 2600) && tiles.Max(t => t.x + t.w) == 5120 && tiles.Max(t => t.y + t.h) == 1440
+          && Enumerable.Range(0, 5120).All(x => tiles.Any(t => x >= t.x && x < t.x + t.w)), $"OCR tiles cover two monitors in {tiles.Count} pieces of at most 2600 px");
+    Check(FarmCheck.ParseSlotSize("76.90") == 76.9 && FarmCheck.ParseSlotSize(FarmCheck.FormatSlotSize(57.625)) == 57.63 && FarmCheck.ParseSlotSize("abc") == null
+          && FarmCheck.ParseSlotSize("5") == null && FarmCheck.ParseSlotSize("") == null && FarmCheck.ParseSlotSize(null) == null, "slot=76.90 saved/parsed, nonsense ignored");
     var exp = new[]{ "UC High", "UC Low", "FC Low" };
     var start = new Dictionary<string,int>{ ["UC High"]=144, ["UC Low"]=9 };
     Check(string.Join(",", FarmCheck.MissingToConfirm(exp, start, null, new HashSet<string>()))=="FC Low", "start: ask about every core not found");

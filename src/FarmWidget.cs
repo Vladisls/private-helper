@@ -28,7 +28,7 @@ namespace CAHelper
         readonly ToolTip debugTip = new ToolTip { ShowAlways = true };
         DebugOverlay overlay; DateTime lastProbe = DateTime.MinValue;
         // what the overlay shows (screen pixels)
-        Rectangle ovInvCap; string ovInv = "not checked yet"; Grid? ovGrid; List<SlotRead> ovSlots = new List<SlotRead>(); string ovTab; Color ovTabColor = Color.Orange;
+        Rectangle ovInvCap, ovTitle; string ovInv = "not checked yet"; Grid? ovGrid; List<SlotRead> ovSlots = new List<SlotRead>(); string ovTab; Color ovTabColor = Color.Orange;
         string ovEnd = "not seen"; Color ovEndColor = Color.HotPink; string ovLoot = "";
         string lastDebugKey;
 
@@ -42,8 +42,12 @@ namespace CAHelper
             try { File.WriteAllLines(DebugPath, debug); } catch { }
         }
 
-        double? expectedPitchOverride;                                           // slot size of the inventory found on screen
-        double ExpectedPitch => expectedPitchOverride ?? FarmCheck.RefPitch * PartyOcr.PhysicalScreenHeight() / 1440.0;
+        // Slot size: nothing is guessed from the screen resolution (the game can run at another size than the
+        // desktop, or on another monitor). slotSize is saved once a read has recognised cores; foundPitch comes
+        // from the last on-screen search. Unknown = 0 = FindGrid tries every slot size.
+        double? slotSize, foundPitch;
+        double KnownPitch => slotSize ?? foundPitch ?? 0;
+        string locatedBy = "saved area";                                        // how the inventory area was found: title text / band search / saved area
 
         // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
         Rectangle invArea = new Rectangle(1905, 240, 620, 615), endArea = new Rectangle(209, 284, 630, 745), lootArea = new Rectangle(2105, 1195, 395, 160);
@@ -112,6 +116,7 @@ namespace CAHelper
                 else if (k == "rare") rareWords = v.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (k.StartsWith("icon:")) learnedIcons.Add((k.Substring(5), v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
                 else if (k.StartsWith("digit:") && k.Length == 7) extraDigits.Add((k[6], v));
+                else if (k == "slot") slotSize = FarmCheck.ParseSlotSize(v);
                 else if (k == "coretab") coreTab = v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray();
             }
             if (learnedIcons.Count > 0) icons = learnedIcons;
@@ -124,6 +129,7 @@ namespace CAHelper
             if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.DefaultIcons()) && !icons.SequenceEqual(FarmCheck.Icons))
                 foreach (var (n, f) in icons) lines.Add("icon:" + n + "=" + string.Join(" ", f.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture))));
             foreach (var (d, cell) in extraDigits) lines.Add("digit:" + d + "=" + cell);
+            if (slotSize != null) lines.Add("slot=" + FarmCheck.FormatSlotSize(slotSize.Value));
             if (coreTab != null) lines.Add("coretab=" + string.Join(" ", coreTab.Select(x => x.ToString("0.0", CultureInfo.InvariantCulture))));
             try { File.WriteAllLines(ConfigPath, lines); } catch { }
         }
@@ -153,7 +159,7 @@ namespace CAHelper
             if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons, digits and core tab are forgotten. The farm log is kept.",
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
-            icons = FarmCheck.DefaultIcons(); extraDigits.Clear(); coreTab = null; grid = null; expectedPitchOverride = null;
+            icons = FarmCheck.DefaultIcons(); extraDigits.Clear(); coreTab = null; grid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
             Debug("RESET: areas back to defaults, learned icons/digits/core tab forgotten");
             Render();
@@ -163,7 +169,7 @@ namespace CAHelper
         {
             var r = AreaPicker.Pick(msg);
             if (r == null) return;
-            area = r.Value; if (resetGrid) { grid = null; coreTab = null; }
+            area = r.Value; if (resetGrid) { grid = null; coreTab = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty; }
             Debug($"area set: {r.Value.X},{r.Value.Y} {r.Value.Width}x{r.Value.Height}");
             SaveConfig(); Render();
         }
@@ -171,7 +177,7 @@ namespace CAHelper
         // ---------- session ----------
         void StartSession()
         {
-            Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}, expected slot {ExpectedPitch:0.0} px)");
+            Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
             running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
             confirmedEmpty.Clear(); pending = null;
             startStop.Text = "Stop session";
@@ -276,7 +282,8 @@ namespace CAHelper
             if (overlay == null) return;
             overlay.Clear();
             var invC = ovInvCap == Rectangle.Empty ? InvCapture : ovInvCap;
-            overlay.Boxes.Add(new DebugOverlay.Box { R = invArea, C = Color.DeepSkyBlue, Label = "Inventory: " + ovInv });
+            overlay.Boxes.Add(new DebugOverlay.Box { R = invArea, C = Color.DeepSkyBlue, Label = $"Inventory ({locatedBy}): " + ovInv });
+            if (ovTitle != Rectangle.Empty) overlay.Boxes.Add(new DebugOverlay.Box { R = ovTitle, C = Color.DeepSkyBlue, Label = "title" });
             if (ovGrid is Grid g)
             {
                 int gx = invC.X, gy = invC.Y;
@@ -312,8 +319,7 @@ namespace CAHelper
                 {
                     var img = PartyOcr.ToImg(bmp); int top = img.H - invArea.Height;
                     ovInvCap = InvCapture;
-                    var g = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, ExpectedPitch);
-                    if (!FarmCheck.InventoryOpen(img, g) && Math.Abs(ExpectedPitch - FarmCheck.RefPitch) > 3) g = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, FarmCheck.RefPitch);
+                    var g = FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch);
                     if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null; }
                     else
                     {
@@ -331,37 +337,71 @@ namespace CAHelper
             DrawOverlay();
         }
 
-        /// Searches the whole screen for the inventory grid (every 3 s at most, only while waiting for counts),
-        /// so it works after a reset or after moving the inventory window without setting the area again.
+        /// Searches every monitor for the inventory (every 3 s at most, only while waiting for counts), so it
+        /// works after a reset, after moving the inventory window or at any resolution without setting the area.
         void TryLocateInventory(DateTime now)
         {
-            if ((now - lastLocate).TotalSeconds < 3) return;
+            if (busyLocate || (now - lastLocate).TotalSeconds < 3) return;
             lastLocate = now;
-            var screen = PartyOcr.PhysicalVirtualScreen();                        // every monitor
-            using (var bmp = PartyOcr.Capture(screen))
+            _ = LocateInventoryAsync();
+        }
+
+        bool busyLocate;
+        /// 1) the text reader looks for the "Inventory" title and the grid is searched just below it (slot size
+        /// from the title's text height); 2) if that finds nothing, the grid pattern is searched on the whole
+        /// picture (FarmCheck.LocateInventory). Coordinates are physical desktop pixels (may be negative).
+        async Task<bool> LocateInventoryAsync()
+        {
+            if (busyLocate) return false;
+            busyLocate = true;
+            try
             {
-                var img = PartyOcr.ToImg(bmp);
-                // Slot size from the desktop resolution and from a 2560x1440 game; keep the stronger grid.
-                Grid? found = null; double bestWeak = 0;
-                foreach (var p in new[] { ExpectedPitch, FarmCheck.RefPitch }.Distinct())
+                var screen = PartyOcr.PhysicalVirtualScreen();                    // every monitor
+                Img img; List<List<OcrWord>> lines = null; string ocrError = null;
+                using (var bmp = PartyOcr.Capture(screen))
                 {
-                    var g1 = FarmCheck.LocateInventory(img, p);
-                    if (g1 == null) continue;
-                    double w = FarmCheck.WeakestLine(img, g1.Value);
-                    if (w > bestWeak) { bestWeak = w; found = g1; }
+                    img = PartyOcr.ToImg(bmp);
+                    try { lines = await PartyOcr.ReadWordsTiledAsync(bmp); }
+                    catch (Exception ex) { ocrError = ex.Message; }
                 }
-                if (found == null) { Debug($"searched all screens ({screen.Width}x{screen.Height}): no inventory grid visible", "locate-none"); return; }
+                Grid? found = null; string how = null; var titleRect = Rectangle.Empty;
+                var titles = lines == null ? new List<OcrWord>() : FarmCheck.InventoryTitles(lines);
+                foreach (var t in titles)
+                {
+                    var tg = FarmCheck.FindGridBelowTitle(img, t);
+                    if (tg == null) continue;
+                    found = tg; how = "title text";
+                    titleRect = new Rectangle(screen.X + (int)t.X, screen.Y + (int)t.Y, (int)Math.Ceiling(t.W), (int)Math.Ceiling(t.H));
+                    break;
+                }
+                if (found == null)
+                {
+                    found = FarmCheck.LocateInventory(img, KnownPitch);
+                    if (found == null && KnownPitch > 0) found = FarmCheck.LocateInventory(img, 0);   // known size stale (resolution changed)
+                    if (found != null) how = "band search";
+                }
+                string titleInfo = lines == null ? $"text reader failed ({ocrError})"
+                                 : titles.Count == 0 ? "no \"Inventory\" title read"
+                                 : $"{titles.Count} \"Inventory\" title(s) at " + string.Join(" ", titles.Select(t => $"{screen.X + t.X:0},{screen.Y + t.Y:0} h{t.H:0}")) + (how == "title text" ? "" : " but no grid below");
+                if (found == null) { Debug($"searched all screens ({screen.X},{screen.Y} {screen.Width}x{screen.Height}): {titleInfo}; no inventory grid visible", "locate-none"); return false; }
                 var g = found.Value; int m = (int)Math.Round(g.PitchX * 0.2);
                 invArea = new Rectangle(screen.X + (int)g.X - m, screen.Y + (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
-                expectedPitchOverride = g.PitchX;
+                foundPitch = g.PitchX; locatedBy = how; ovTitle = titleRect;
                 grid = null; lastInvRead = DateTime.MinValue; SaveConfig();
-                Debug($"found the inventory elsewhere on screen: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}");
+                Debug($"found the inventory by {how}: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}, slot {g.PitchX:0.0} px ({titleInfo})");
+                return true;
             }
+            catch (Exception ex) { Debug("inventory search failed: " + ex.Message, "locate-error"); return false; }
+            finally { busyLocate = false; }
         }
 
         /// The inventory area plus the tab strip above it (so the active tab can be checked).
         int TabMargin => (int)Math.Round(70 * invArea.Height / 614.0);
-        Rectangle InvCapture => new Rectangle(invArea.X, Math.Max(0, invArea.Y - TabMargin), invArea.Width, invArea.Height + Math.Min(invArea.Y, TabMargin));
+        /// (Clipped at the top of all monitors, which is below 0 when a monitor sits above the main one.)
+        Rectangle InvCapture
+        {
+            get { int top = Math.Max(PartyOcr.PhysicalVirtualScreen().Y, invArea.Y - TabMargin); return new Rectangle(invArea.X, top, invArea.Width, invArea.Bottom - top); }
+        }
 
         void CheckInventory(DateTime now)
         {
@@ -370,28 +410,22 @@ namespace CAHelper
             {
                 var img = PartyOcr.ToImg(bmp);
                 int top = img.H - invArea.Height;
-                if (grid == null)
+                // The cached grid can be stale (inventory moved) or wrong: search again before calling it closed.
+                bool hadGrid = grid != null;
+                var cur = FarmCheck.CurrentGrid(img, grid, () => FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch), out bool replaced);
+                if (cur == null)
                 {
-                    var g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, ExpectedPitch);
-                    if (!FarmCheck.InventoryOpen(img, g0) && Math.Abs(ExpectedPitch - FarmCheck.RefPitch) > 3)
-                        g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, FarmCheck.RefPitch);   // game at 2560x1440 on another desktop size
-                    if (!FarmCheck.InventoryOpen(img, g0))
-                    {
-                        invOpenSince = DateTime.MinValue; Debug($"inventory not open in its area (grid contrast {g0.Score:0.00}, needs 1.70)", "closed");
-                        ovInv = $"not visible (contrast {g0.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null;
-                        waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
-                        if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
-                        return;
-                    }
-                    grid = g0; Debug($"grid found at {g0.X:0},{g0.Y:0} in the capture, slot {g0.PitchX:0.0}x{g0.PitchY:0.0} px, contrast {g0.Score:0.00}");
-                }
-                if (!FarmCheck.InventoryOpen(img, grid.Value))
-                {
-                    invOpenSince = DateTime.MinValue; Debug("inventory closed (or moved)", "closed");
-                    ovInv = "closed"; ovGrid = null; ovSlots.Clear(); ovTab = null;
+                    invOpenSince = DateTime.MinValue;
+                    Debug(hadGrid ? $"inventory closed (or moved): not found again in its area ({locatedBy})" : $"inventory not open in its area ({locatedBy}; no grid with contrast 1.70)", "closed");
+                    ovInv = hadGrid ? "closed" : "not visible (no grid with contrast 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null;
                     waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
-                    if (baseline == null || finishing) TryLocateInventory(now);
+                    if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
                     return;
+                }
+                if (replaced)
+                {
+                    var g0 = cur.Value; grid = g0;
+                    Debug($"grid {(hadGrid ? "found again" : "found")} at {g0.X:0},{g0.Y:0} in the capture ({locatedBy}), slot {g0.PitchX:0.0}x{g0.PitchY:0.0} px, contrast {g0.Score:0.00}");
                 }
                 if (invOpenSince == DateTime.MinValue) invOpenSince = now;
                 if ((now - invOpenSince).TotalSeconds < 0.5 || (now - lastInvRead).TotalSeconds < 1) return;   // open for 0.5 s, read once a second
@@ -422,9 +456,17 @@ namespace CAHelper
                 {
                     Debug($"skipped: only {found} core types recognised (need {Math.Max(1, (expectedFound + 1) / 2)}) - wrong tab or icons need re-learning", "few:" + found);
                     waitReason = $"only {found} core types recognised - core tab open? (else Areas & learning > Learn core icons)";
+                    if (found == 0)
+                    {
+                        // Nothing recognised: the grid may be the wrong one (e.g. a lookalike pattern). Search again next time,
+                        // and look for the inventory's title on screen while waiting for counts.
+                        grid = null;
+                        if (baseline == null || finishing) TryLocateInventory(now);
+                    }
                     return;
                 }
                 waitReason = null;
+                if (slotSize == null || Math.Abs(slotSize.Value - g.PitchX) > 0.5) { slotSize = g.PitchX; SaveConfig(); Debug($"slot size {g.PitchX:0.0} px saved (read recognised {found} core types)"); }
                 if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
                 Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col}={(x.Count?.ToString() ?? "?")} (icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.Count)));
                 grid = g; lastInvImg = img; lastSlots = slots;
@@ -537,18 +579,19 @@ namespace CAHelper
         }
 
         // ---------- learning ----------
-        void LearnIcons()
+        async void LearnIcons()
         {
             using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
-                var g = FarmCheck.FindGrid(img, 0, img.H - invArea.Height, img.W, invArea.Height, 8, 8, ExpectedPitch);
+                var g = FarmCheck.FindGridNear(img, 0, img.H - invArea.Height, img.W, invArea.Height, KnownPitch);
                 if (!FarmCheck.InventoryOpen(img, g))
                 {
-                    lastLocate = DateTime.MinValue; TryLocateInventory(DateTime.Now);
-                    if (grid == null && invArea != Rectangle.Empty && lastInvRead == DateTime.MinValue && debug.LastOrDefault()?.Contains("found the inventory") == true)
+                    Debug($"learn icons: inventory not in its area (grid contrast {g.Score:0.00}), searching all screens");
+                    lastLocate = DateTime.Now;
+                    if (await LocateInventoryAsync())
                     { MessageBox.Show("Found the inventory at a new spot. Press Learn core icons once more.", "Farm Tracker"); return; }
-                    Debug($"learn icons: inventory not found (grid contrast {g.Score:0.00})");
+                    Debug("learn icons: inventory not found");
                     MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return;
                 }
                 g = FarmCheck.BestRead(img, g, icons, Digits).grid;

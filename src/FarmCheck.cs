@@ -79,11 +79,33 @@ namespace CAHelper
         };
         // live captures (2026-09-28): JPG colours sit a little off the live ones, so these match better in game
         public static readonly (string name, double[] f)[] IconsLive = {
+            // all ten from a live Debug capture (2026-09-28); the shine moves an icon's mix by ~0.4-0.6, other cores are >= 1.26 away
+            ("Upgrade Core (Ultimate)", new[] { 0.00, 0.00, 0.09, 3.55, 13.23, 4.59, 0.55, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 51.23, 10.27, 16.50 }),
+            ("Upgrade Core (Highest)", new[] { 0.00, 0.00, 0.09, 0.00, 0.05, 0.00, 0.00, 0.00, 0.00, 1.73, 13.73, 13.27, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 48.18, 6.73, 16.23 }),
+            ("Upgrade Core (High)", new[] { 9.32, 0.77, 0.32, 0.36, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 8.95, 65.00, 12.77, 2.50 }),
+            ("Upgrade Core (Medium)", new[] { 1.36, 17.86, 0.41, 0.77, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 65.23, 12.91, 1.45 }),
+            ("Upgrade Core (Low)", new[] { 0.18, 1.09, 17.36, 1.14, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 62.73, 15.73, 1.77 }),
+            ("Force Core (Ultimate)", new[] { 0.00, 0.00, 0.00, 5.36, 4.41, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 46.59, 13.14, 30.50 }),
+            ("Force Core (Highest)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.23, 1.23, 11.23, 2.00, 0.00, 0.00, 0.00, 0.00, 0.00, 44.86, 13.82, 26.64 }),
+            ("Force Core (High)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 18.59, 13.82, 0.05, 0.00, 0.00, 0.00, 0.00, 0.00, 44.86, 14.50, 8.18 }),
+            ("Force Core (Medium)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 3.50, 17.05, 9.32, 0.00, 0.00, 0.00, 0.00, 45.91, 16.77, 7.45 }),
+            ("Force Core (Low)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.18, 5.77, 5.14, 1.00, 2.41, 7.14, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 46.05, 19.82, 12.50 }),
+            // a second live moment for the two that were reported missing
             ("Force Core (Medium)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 5.55, 15.77, 8.36, 0.00, 0.00, 0.00, 0.00, 46.68, 18.18, 5.45 }),
             ("Force Core (Low)", new[] { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.23, 6.23, 7.91, 2.09, 2.64, 8.32, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 46.86, 17.73, 8.00 }),
         };
-        /// Default icon set: the screenshot icons plus the live ones.
-        public static List<(string name, double[] f)> DefaultIcons() => Icons.Concat(IconsLive).ToList();
+        /// Default icon set: live icons first, the screenshot ones as extra samples.
+        public static List<(string name, double[] f)> DefaultIcons() => IconsLive.Concat(Icons).ToList();
+        public const double IconMatchMax = 1.0;
+
+        /// Best core for an icon mix: closest sample, and clearly closer than any other core's closest sample.
+        public static (string name, double d)? MatchIcon(double[] f, IList<(string name, double[] f)> icons)
+        {
+            var byName = icons.GroupBy(t => t.name).Select(g => (name: g.Key, d: g.Min(t => Dist(f, t.f)))).OrderBy(t => t.d).ToList();
+            if (byName.Count == 0 || byName[0].d > IconMatchMax) return null;
+            if (byName.Count > 1 && byName[0].d > 0.5 && byName[1].d < byName[0].d * 1.3) return null;   // ambiguous
+            return byName[0];
+        }
 
         public static readonly double[] EmptySlot = { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 100.00, 0.00, 0.00 };
 
@@ -91,19 +113,33 @@ namespace CAHelper
         /// Finds the 8x8 slot grid inside a box (the box may be loose, even the whole inventory window).
         /// Builds a brightness profile along each axis once, then searches every slot size and start for the
         /// pattern "bright border line, darker slot interior" repeated for all slots.
-        public static Grid FindGrid(Img img, int bx, int by, int bw, int bh, int cols = 8, int rows = 8, double expectedPitch = RefPitch)
+        public const double MinPitch = 48, MaxPitch = 130;     // 1080p (~58 px slots) up to 4K (~115 px)
+        public const double DefaultTolerance = 0.08;
+
+        /// expectedPitch = 0: search every plausible slot size (no guess from the screen resolution).
+        /// expectedPitch > 0: a slot size already known (saved, or estimated from the title text); search only
+        /// within ±tolerance of it (0.08 = ±8%).
+        public static Grid FindGrid(Img img, int bx, int by, int bw, int bh, int cols = 8, int rows = 8, double expectedPitch = 0, double tolerance = DefaultTolerance)
         {
+            double pMin = expectedPitch > 0 ? Math.Max(MinPitch * 0.8, expectedPitch * (1 - tolerance)) : MinPitch;
+            double pMax = expectedPitch > 0 ? Math.Min(MaxPitch * 1.2, expectedPitch * (1 + tolerance)) : MaxPitch;
+            // Pitch step small enough that the last of n slot borders drifts at most ~0.5 px from a real border
+            // (a 0.5 px step drifted up to 2 px over 8 slots and missed the 1-2 px border lines on a whole screen).
+            // Pitches come from one fixed lattice, so the result doesn't depend on where the range starts.
+            double step = Math.Min(0.25, 1.0 / Math.Max(cols, rows));
+            double pFirst = Math.Ceiling(pMin / step) * step;
             // Look a little past the box so a tight or slightly clipped box still finds the whole grid.
-            int pad = (int)Math.Round(expectedPitch * 0.6);
+            int pad = (int)Math.Round(pMax * 0.6);
             int x0 = Math.Max(0, bx - pad), y0 = Math.Max(0, by - pad);
             int x1 = Math.Min(img.W, bx + bw + pad), y1 = Math.Min(img.H, by + bh + pad);
             int w = x1 - x0, h = y1 - y0;
 
             (double start, double pitch, double score) Axis(double[] prof, int n)
             {
-                double best = double.MinValue, bs = 0, bp = expectedPitch;
-                for (double p = expectedPitch * 0.8; p <= expectedPitch * 1.25; p += 0.25)
+                double best = double.MinValue, bs = 0, bp = pFirst;
+                for (int pi = 0; pFirst + pi * step <= pMax; pi++)
                 {
+                    double p = pFirst + pi * step;
                     int inset = Math.Max(2, (int)Math.Round(6 * p / RefPitch));
                     for (double st = 0; st + n * p < prof.Length - 1 - inset; st += 1)
                     {
@@ -197,14 +233,140 @@ namespace CAHelper
 
         /// Looks for the 8x8 inventory grid anywhere on the screen (used when the saved area doesn't show it).
         /// Returns null when there's no convincing grid.
-        public static Grid? LocateInventory(Img screen, double expectedPitch = RefPitch)
+        public static Grid? LocateInventory(Img screen, double expectedPitch = 0)
         {
-            var g = FindGrid(screen, 0, 0, screen.W, screen.H, 8, 8, expectedPitch);
-            if (!InventoryOpen(screen, g)) return null;
-            if (WeakestLine(screen, g) < MinWeakestLine) return null;
+            // A whole screen has many repeating patterns, so search narrow slot-size bands one at a time
+            // (MinPitch..MaxPitch, or only near a size already known), check each band's best grid again in a
+            // box around it, and keep the strongest real one.
+            const double tol = 0.05;
+            var bands = new List<double>();
+            if (expectedPitch > 0) bands.Add(expectedPitch);
+            else for (double c = MinPitch / (1 - tol); c * (1 - tol) < MaxPitch; c *= (1 + tol) / (1 - tol)) bands.Add(c);
+            Grid? best = null; double bestWeak = MinWeakestLine;
+            foreach (var p in bands)
+            {
+                var g = FindGrid(screen, 0, 0, screen.W, screen.H, 8, 8, p, tol);
+                if (!Plausible(screen, g)) continue;
+                var r = FindGrid(screen, (int)g.X, (int)g.Y, (int)Math.Round(8 * g.PitchX), (int)Math.Round(8 * g.PitchY), 8, 8, g.PitchX);
+                if (Plausible(screen, r) && WeakestLine(screen, r) >= WeakestLine(screen, g)) g = r;
+                double w = WeakestLine(screen, g);
+                if (w > bestWeak) { bestWeak = w; best = g; }
+            }
+            return best;
+        }
+        /// Slots are square, the grid lies on the screen and looks like an open inventory.
+        static bool Plausible(Img img, Grid g) =>
+            Math.Abs(g.PitchX / g.PitchY - 1) < 0.04 && g.X >= 0 && g.Y >= 0 && g.X + 8 * g.PitchX < img.W && g.Y + 8 * g.PitchY < img.H && InventoryOpen(img, g);
+        public const double MinWeakestLine = 8.0;
+
+        /// Grid search in the saved inventory area: near the known slot size, checked against a search over every
+        /// slot size (the known size can be stale after a resolution change, and a wrong size can still find a
+        /// lookalike: 68 px "slots" over a 77 px inventory pass the contrast check). Keeps the stronger grid.
+        /// expectedPitch = 0: every size straight away.
+        public static Grid FindGridNear(Img img, int bx, int by, int bw, int bh, double expectedPitch)
+        {
+            var g = FindGrid(img, bx, by, bw, bh, 8, 8, expectedPitch);
+            if (expectedPitch <= 0) return g;
+            var any = FindGrid(img, bx, by, bw, bh, 8, 8, 0);
+            return Strength(img, any) > Strength(img, g) + 1 ? any : g;
+        }
+        /// How clearly a grid is a real inventory: its weakest row/column border contrast (-inf when implausible).
+        static double Strength(Img img, Grid g) => Plausible(img, g) ? WeakestLine(img, g) : double.NegativeInfinity;
+
+        /// The grid to use for this capture. The cached grid while it still shows an open inventory; otherwise a
+        /// fresh search (the inventory may have moved or the cached grid may be wrong), which replaces the cache
+        /// when it finds an open inventory. null = the inventory really isn't visible in the area.
+        public static Grid? CurrentGrid(Img img, Grid? cached, Func<Grid> search, out bool replaced)
+        {
+            replaced = false;
+            if (cached is Grid c && InventoryOpen(img, c)) return c;
+            var g = search();
+            if (!InventoryOpen(img, g)) return null;
+            replaced = true;
             return g;
         }
-        public const double MinWeakestLine = 8.0;
+
+        // ---------- finding the inventory by its title ----------
+        /// Slot size ~ 3.3 x the "Inventory" title's text height (2560x1440: text ~23 px, slots 76.9 px).
+        /// The text reader's box height varies a little, so the grid is searched within ±25% of that.
+        public const double TitlePitchRatio = 3.3, TitleTolerance = 0.25;
+
+        /// True for the inventory window's title as the text reader returns it ("Inventory", "lnventory", "Inventorv").
+        public static bool IsInventoryTitle(string text)
+        {
+            var t = new string((text ?? "").Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant()
+                .Replace('l', 'i').Replace('1', 'i').Replace('0', 'o');
+            return t.Length >= 7 && t.Length <= 11 && EditDistance(t, "inventory") <= 2;
+        }
+        static int EditDistance(string a, string b)
+        {
+            var d = new int[a.Length + 1, b.Length + 1];
+            for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+            for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+            for (int i = 1; i <= a.Length; i++)
+                for (int j = 1; j <= b.Length; j++)
+                    d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            return d[a.Length, b.Length];
+        }
+
+        /// Every "Inventory" title in the text reader's lines (a single word, or a whole short line such as
+        /// "Inven tory"), as a box in the read image's pixels.
+        public static List<OcrWord> InventoryTitles(IEnumerable<IList<OcrWord>> lines)
+        {
+            var found = new List<OcrWord>();
+            foreach (var line in lines)
+            {
+                var hits = line.Where(w => IsInventoryTitle(w.Text)).ToList();
+                if (hits.Count == 0 && line.Count > 1 && line.Count <= 3 && IsInventoryTitle(string.Concat(line.Select(w => w.Text))))
+                {
+                    double x0 = line.Min(w => w.X), y0 = line.Min(w => w.Y), x1 = line.Max(w => w.X + w.W), y1 = line.Max(w => w.Y + w.H);
+                    hits.Add(new OcrWord(string.Concat(line.Select(w => w.Text)), x0, y0, x1 - x0, y1 - y0));
+                }
+                found.AddRange(hits);
+            }
+            return found;
+        }
+
+        /// Where the grid should be, given the title's box: below the title, about 8 slots wide and centred
+        /// under it, slot size ~ 3.3 x the text height. The box is loose on purpose (FindGrid copes with that).
+        public static (int x, int y, int w, int h, double pitch) TitleSearchBox(OcrWord title)
+        {
+            double pitch = TitlePitchRatio * title.H, cx = title.X + title.W / 2;
+            return ((int)Math.Round(cx - 5 * pitch), (int)Math.Round(title.Y + title.H), (int)Math.Round(10 * pitch), (int)Math.Round(10 * pitch), pitch);
+        }
+
+        /// Finds the inventory grid under an "Inventory" title (title box in the image's pixels). null = no convincing grid there.
+        public static Grid? FindGridBelowTitle(Img img, OcrWord title)
+        {
+            var (x, y, w, h, pitch) = TitleSearchBox(title);
+            int x0 = Math.Max(0, x), y0 = Math.Max(0, y), x1 = Math.Min(img.W, x + w), y1 = Math.Min(img.H, y + h);
+            if (x1 - x0 < 8 * pitch * (1 - TitleTolerance) || y1 - y0 < 8 * pitch * (1 - TitleTolerance)) return null;
+            var g = FindGrid(img, x0, y0, x1 - x0, y1 - y0, 8, 8, pitch, TitleTolerance);
+            return Plausible(img, g) && WeakestLine(img, g) >= MinWeakestLine ? g : (Grid?)null;
+        }
+
+        /// Pieces of at most max x max pixels (overlapping, so a title isn't cut in two) covering a w x h image;
+        /// the text reader only takes images up to a certain size.
+        public static List<(int x, int y, int w, int h)> Tiles(int w, int h, int max, int overlap)
+        {
+            var list = new List<(int, int, int, int)>();
+            int step = Math.Max(1, max - overlap);
+            for (int y = 0; y < h; y += step)
+            {
+                for (int x = 0; x < w; x += step)
+                {
+                    list.Add((x, y, Math.Min(max, w - x), Math.Min(max, h - y)));
+                    if (x + max >= w) break;
+                }
+                if (y + max >= h) break;
+            }
+            return list;
+        }
+
+        /// Slot size saved in cabal-helper-farm.txt ("slot=76.9"). null when missing or not a plausible size.
+        public static double? ParseSlotSize(string v) =>
+            double.TryParse((v ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double p) && p >= MinPitch * 0.8 && p <= MaxPitch * 1.2 ? p : (double?)null;
+        public static string FormatSlotSize(double p) => p.ToString("0.00", CultureInfo.InvariantCulture);
 
         /// Brightness on border lines vs just inside the slots. Inventory open ~2.2, anything else ~1.3.
         public static double BorderContrast(Img img, Grid g, int cols = 8, int rows = 8)
@@ -335,8 +497,9 @@ namespace CAHelper
                 {
                     var f = IconFeature(img, g, r, c);
                     double empty = Dist(f, EmptySlot);
-                    var best = icons.Select(t => (t.name, d: Dist(f, t.f))).OrderBy(t => t.d).First();
-                    if (empty < best.d || best.d > 1.0) continue;                   // empty slot or something that isn't a known core
+                    var m = MatchIcon(f, icons);
+                    if (m == null || empty < m.Value.d) continue;                   // empty slot, unknown item, or ambiguous
+                    var best = m.Value;
                     var s = new SlotRead { Row = r, Col = c, Item = best.name, IconDist = best.d };
                     s.Count = ReadCount(img, g, r, c, digits, s.Cells);
                     list.Add(s);
