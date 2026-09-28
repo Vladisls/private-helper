@@ -84,6 +84,11 @@ namespace CAHelper
 
         void Rebuild()
         {
+            using (new Ui.NoRedraw(this)) RebuildNow();
+        }
+
+        void RebuildNow()
+        {
             rows.SuspendLayout();
             foreach (Control c in rows.Controls.Cast<Control>().ToArray()) { rows.Controls.Remove(c); c.Dispose(); }
             live.Clear(); tips.RemoveAll();

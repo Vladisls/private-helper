@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -72,6 +73,53 @@ namespace CAHelper
             foreach (var s in Screen.AllScreens)
                 if (s.WorkingArea.IntersectsWith(new Rectangle(p, Size))) { onScreen = true; break; }
             Location = onScreen ? p : fallback;
+        }
+    }
+
+    /// Flicker-free UI updates.
+    static class Ui
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+        const int WM_SETREDRAW = 0x000B;
+
+        /// Pauses drawing while controls are rebuilt, then paints once: no half-built frames.
+        public sealed class NoRedraw : IDisposable
+        {
+            readonly Control c;
+            public NoRedraw(Control c) { this.c = c; if (c.IsHandleCreated) SendMessage(c.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero); }
+            public void Dispose()
+            {
+                if (!c.IsHandleCreated) return;
+                SendMessage(c.Handle, WM_SETREDRAW, (IntPtr)1, IntPtr.Zero);
+                c.Invalidate(true); c.Update();
+            }
+        }
+
+        public struct Line { public string Text; public Color Color; public bool Bold; public Line(string t, Color c, bool b = false) { Text = t; Color = c; Bold = b; } }
+
+        /// Shows lines in a FlowLayoutPanel reusing the same labels; only changed text or colours repaint.
+        public static void SetLines(FlowLayoutPanel panel, IList<Line> lines, int maxWidth)
+        {
+            panel.SuspendLayout();
+            for (int i = 0; i < lines.Count; i++)
+            {
+                Label l;
+                if (i < panel.Controls.Count) l = (Label)panel.Controls[i];
+                else { l = new Label { AutoSize = true, UseMnemonic = false, Margin = new Padding(0, 1, 0, 1) }; panel.Controls.Add(l); }
+                var f = lines[i].Bold ? Theme.Title : Theme.Normal;
+                if (l.MaximumSize.Width != maxWidth) l.MaximumSize = new Size(maxWidth, 0);
+                if (l.Text != lines[i].Text) l.Text = lines[i].Text;
+                if (l.ForeColor != lines[i].Color) l.ForeColor = lines[i].Color;
+                if (!ReferenceEquals(l.Font, f)) l.Font = f;
+            }
+            while (panel.Controls.Count > lines.Count) { var c = panel.Controls[panel.Controls.Count - 1]; panel.Controls.Remove(c); c.Dispose(); }
+            panel.ResumeLayout();
+        }
+
+        /// Height the lines need (for panels that size themselves to their content).
+        public static int LinesHeight(FlowLayoutPanel panel)
+        {
+            int h = 0; foreach (Control c in panel.Controls) h += c.Height + c.Margin.Vertical; return h;
         }
     }
 

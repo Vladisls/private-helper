@@ -142,6 +142,11 @@ namespace CAHelper
         // ---------- UI ----------
         void Rebuild()
         {
+            using (new Ui.NoRedraw(this)) RebuildNow();
+        }
+
+        void RebuildNow()
+        {
             rows.SuspendLayout();
             rows.AutoScrollPosition = Point.Empty;     // lay rows out from the top
             tips.RemoveAll();

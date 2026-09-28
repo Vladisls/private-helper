@@ -79,7 +79,7 @@ namespace CAHelper
         readonly AlarmEngine alarmEngine = new AlarmEngine();
         DateTime alarmFlashUntil = DateTime.MinValue; string alarmFlashTitle = "", alarmFlashSub = "";
         int alarmBeepsLeft; DateTime nextAlarmBeep = DateTime.MinValue;
-        bool blinkOn; int blinkCounter;
+        bool blinkOn; int blinkCounter, topCounter;
 
         public HelperContext()
         {
@@ -259,9 +259,14 @@ namespace CAHelper
                 var st = w.Tick(now, idle, focused, settings, blinkOn);
                 if (st.Beep) beep = true;
                 if (st.Flash && (flashFrom == null || st.Left < flashState.Left)) { flashFrom = w; flashState = st; }
-                w.KeepOnTop();
             }
-            if (launcher.Visible) launcher.KeepOnTop();
+            // Re-assert "always on top" every ~2 s instead of 5x a second (less work, no z-order flicker).
+            if (++topCounter >= 10)
+            {
+                topCounter = 0;
+                foreach (var w in widgets) w.KeepOnTop();
+                if (launcher.Visible) launcher.KeepOnTop();
+            }
 
             // Alarms run here, so they ring even when the Alarms panel is closed.
             AlarmStore.CheckFile(now);

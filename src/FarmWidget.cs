@@ -35,13 +35,15 @@ namespace CAHelper
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
         Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         bool busyEnd, busyLoot;
+        string warning; DateTime warningAt;
+        void Warn(string text) { warning = text; warningAt = DateTime.Now; }
 
         readonly Label status = new Label { Dock = DockStyle.Top, Height = 34, Font = Theme.Small, ForeColor = Theme.Muted, UseMnemonic = false };
         readonly Button startStop = Theme.MakeButton("Start session", primary: true);
-        readonly FlowLayoutPanel body = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
+        readonly FlowLayoutPanel body = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 4, 0, 0) };
         readonly Label footer = new Label { Dock = DockStyle.Bottom, Height = 20, Font = Theme.Small, ForeColor = Theme.Muted, Cursor = Cursors.Hand, Text = "Areas & learning ▾", TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
 
-        public FarmWidget() : base(320, 380)
+        public FarmWidget() : base(320, 200)
         {
             Content.Padding = new Padding(10, 6, 8, 4);
             startStop.Dock = DockStyle.Top; startStop.Height = 30;
@@ -152,7 +154,7 @@ namespace CAHelper
             if (!running || (now - lastCheck).TotalMilliseconds < 1000) return default;
             lastCheck = now;
             try { CheckEnd(now); CheckInventory(now); CheckLoot(); }
-            catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
+            catch (Exception ex) { Warn("⚠ " + ex.Message); }
             Render();
             return default;
         }
@@ -176,7 +178,7 @@ namespace CAHelper
                         var r = FarmCheck.ParseEndWindow(lines);
                         if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
                     }
-                    catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
+                    catch (Exception ex) { Warn("⚠ " + ex.Message); }
                     finally { copy.Dispose(); busyEnd = false; Render(); }
                 }));
             }
@@ -197,7 +199,7 @@ namespace CAHelper
                 grid = g; lastInvImg = img; lastSlots = slots;
                 var counts = new Dictionary<string, int>();
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
-                if (slots.Any(x => !x.Count.HasValue)) status.Text = "Some counts unreadable: Areas & learning > Fix counts";
+                if (slots.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
                 if (baseline == null) baseline = counts; else current = counts;
             }
         }
@@ -273,12 +275,13 @@ namespace CAHelper
             var el = running ? DateTime.Now - started : TimeSpan.Zero;
             int dp = runs.Sum(x => x.run.Dp);
             double hours = Math.Max(el.TotalHours, 1e-6);
-            status.Text = running
+            string st = running
                 ? $"Session {Fmt(el)} · {runs.Count} runs · {dp} DP ({(el.TotalMinutes >= 1 ? (dp / hours).ToString("0") : "–")}/h)"
                 : runs.Count > 0 ? $"Last session: {runs.Count} runs, {dp} DP. Start a new one when you begin farming." : "Start a session when you begin farming. Open the core tab for a second at the start and the end.";
-            body.SuspendLayout();
-            foreach (Control c in body.Controls.Cast<Control>().ToArray()) { body.Controls.Remove(c); c.Dispose(); }
-            void Line(string t, Color col, bool bold = false) => body.Controls.Add(new Label { Text = t, AutoSize = true, ForeColor = col, UseMnemonic = false, Font = bold ? Theme.Title : Theme.Normal, Margin = new Padding(0, 1, 0, 1), MaximumSize = new Size(Width - 30, 0) });
+            if (warning != null && (DateTime.Now - warningAt).TotalSeconds < 10) st = warning;
+            if (status.Text != st) status.Text = st;
+            var lines = new List<Ui.Line>();
+            void Line(string t, Color col, bool bold = false) => lines.Add(new Ui.Line(t, col, bold));
 
             if (runs.Count > 0)
             {
@@ -303,7 +306,17 @@ namespace CAHelper
                 Line("Rare drops", Theme.Accent, true);
                 foreach (var kv in rare) Line($"{kv.Key} x{kv.Value}", Theme.Good);
             }
-            body.ResumeLayout();
+            Ui.SetLines(body, lines, Width - 30);
+            FitHeight();
+        }
+
+        /// Grow or shrink to the content instead of a fixed size.
+        void FitHeight()
+        {
+            int want = 26 /*title*/ + Content.Padding.Vertical + status.Height + startStop.Height + 6 + Ui.LinesHeight(body) + footer.Height + 8;
+            int max = Screen.FromControl(this).WorkingArea.Height - 40;
+            int h = Math.Max(150, Math.Min(max, want));
+            if (Height != h) Height = h;
         }
 
         static string Fmt(TimeSpan t) => t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
