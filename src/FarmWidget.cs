@@ -37,6 +37,11 @@ namespace CAHelper
         Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         bool busyEnd, busyLoot;
         string warning; DateTime warningAt;
+        readonly HashSet<string> confirmedEmpty = new HashSet<string>();
+        (List<string> names, Dictionary<string, int> counts, bool start)? pending;       // waiting for the player's answer
+        readonly FlowLayoutPanel confirmBox = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Visible = false, Padding = new Padding(0, 4, 0, 4) };
+        readonly Label confirmText = new Label { AutoSize = true, ForeColor = Color.FromArgb(245, 196, 81), Font = Theme.Title, UseMnemonic = false };
+        readonly Button confirmYes = Theme.MakeButton("Yes, none", primary: true), confirmAgain = Theme.MakeButton("Read again");
         void Warn(string text) { warning = text; warningAt = DateTime.Now; }
 
         readonly Label status = new Label { Dock = DockStyle.Top, Height = 34, Font = Theme.Small, ForeColor = Theme.Muted, UseMnemonic = false };
@@ -48,7 +53,13 @@ namespace CAHelper
         {
             Content.Padding = new Padding(10, 6, 8, 4);
             startStop.Dock = DockStyle.Top; startStop.Height = 30;
-            Content.Controls.Add(body); Content.Controls.Add(footer); Content.Controls.Add(startStop); Content.Controls.Add(status);
+            confirmYes.Width = 110; confirmAgain.Width = 110;
+            var confirmButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
+            confirmButtons.Controls.Add(confirmYes); confirmButtons.Controls.Add(confirmAgain);
+            confirmBox.Controls.Add(confirmText); confirmBox.Controls.Add(confirmButtons);
+            confirmYes.Click += (s, e) => { Touch(); ResolvePending(true); };
+            confirmAgain.Click += (s, e) => { Touch(); ResolvePending(false); };
+            Content.Controls.Add(body); Content.Controls.Add(confirmBox); Content.Controls.Add(footer); Content.Controls.Add(startStop); Content.Controls.Add(status);
             startStop.Click += (s, e) => { Touch(); if (!running) StartSession(); else if (finishing) StopSession(); else RequestStop(); };
             footer.Click += (s, e) => { Touch(); Menu2().Show(footer, new Point(0, footer.Height)); };
             Load += (s, e) => { LoadConfig(); Render(); };
@@ -113,6 +124,7 @@ namespace CAHelper
         void StartSession()
         {
             running = true; started = DateTime.Now; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
+            confirmedEmpty.Clear(); pending = null;
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
             Render();
@@ -154,13 +166,7 @@ namespace CAHelper
             catch { }
         }
 
-        Dictionary<string, int> Gains()
-        {
-            var g = new Dictionary<string, int>();
-            if (baseline == null || current == null) return g;
-            foreach (var kv in current) if (baseline.TryGetValue(kv.Key, out int b) && kv.Value != b) g[kv.Key] = kv.Value - b;
-            return g;
-        }
+        Dictionary<string, int> Gains() => FarmCheck.Gains(baseline, current);
 
         // ---------- once a second ----------
         public override AlertState Tick(DateTime now, TimeSpan idle, bool gameFocused, Settings s, bool blinkOn)
@@ -206,6 +212,7 @@ namespace CAHelper
 
         void CheckInventory(DateTime now)
         {
+            if (pending != null) return;                                       // waiting for the player's answer
             using (var bmp = PartyOcr.Capture(invArea))
             {
                 var img = PartyOcr.ToImg(bmp);
@@ -220,9 +227,7 @@ namespace CAHelper
                 var counts = new Dictionary<string, int>();
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                 if (slots.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
-                if (baseline == null) { baseline = counts; if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
-                else current = counts;
-                if (finishing) { StopSession(); return; }
+                ApplyRead(counts);
             }
         }
 
@@ -255,6 +260,41 @@ namespace CAHelper
                     finally { copy.Dispose(); busyLoot = false; }
                 }));
             }
+        }
+
+        /// Takes a finished inventory read. Missing cores are confirmed with the player before they count as 0.
+        void ApplyRead(Dictionary<string, int> counts)
+        {
+            var missing = FarmCheck.MissingToConfirm(icons.Select(i => i.name), counts, baseline, confirmedEmpty);
+            if (missing.Count > 0)
+            {
+                bool start = baseline == null;
+                pending = (missing, counts, start);
+                confirmText.Text = start
+                    ? "Not found: " + string.Join(", ", missing) + ". You have none of these?"
+                    : "Not found now: " + string.Join(", ", missing.Select(n => $"{n} (had {baseline[n]})")) + ". Used them all?";
+                confirmYes.Text = start ? "Yes, none" : "Yes, used up";
+                return;
+            }
+            pending = null;
+            Commit(counts);
+        }
+
+        void Commit(Dictionary<string, int> counts)
+        {
+            foreach (var n in confirmedEmpty) if (!counts.ContainsKey(n)) counts[n] = 0;
+            if (baseline == null) { baseline = counts; if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
+            else current = counts;
+            if (finishing) StopSession();
+        }
+
+        void ResolvePending(bool yes)
+        {
+            if (pending == null) return;
+            var p = pending.Value; pending = null;
+            if (yes) { foreach (var n in p.names) confirmedEmpty.Add(n); Commit(p.counts); }
+            else lastInvRead = DateTime.MinValue;                               // read again on the next check
+            Render();
         }
 
         // ---------- learning ----------
@@ -332,6 +372,9 @@ namespace CAHelper
                 Line("Rare drops", Theme.Accent, true);
                 foreach (var kv in rare) Line($"{kv.Key} x{kv.Value}", Theme.Good);
             }
+            bool showConfirm = pending != null;
+            if (confirmBox.Visible != showConfirm) confirmBox.Visible = showConfirm;
+            if (confirmText.MaximumSize.Width != Width - 30) confirmText.MaximumSize = new Size(Width - 30, 0);
             Ui.SetLines(body, lines, Width - 30);
             FitHeight();
         }
@@ -339,7 +382,8 @@ namespace CAHelper
         /// Grow or shrink to the content instead of a fixed size.
         void FitHeight()
         {
-            int want = 26 /*title*/ + Content.Padding.Vertical + status.Height + startStop.Height + 6 + Ui.LinesHeight(body) + footer.Height + 8;
+            int want = 26 /*title*/ + Content.Padding.Vertical + status.Height + startStop.Height + 6 + Ui.LinesHeight(body) + footer.Height + 8
+                     + (confirmBox.Visible ? confirmBox.PreferredSize.Height : 0);
             int max = Screen.FromControl(this).WorkingArea.Height - 40;
             int h = Math.Max(150, Math.Min(max, want));
             if (Height != h) Height = h;

@@ -217,6 +217,17 @@ static class T {
         Console.WriteLine($"INFO 1920x1080 (resized screenshot): grid pitch {g2.PitchX:0.00} -> {got2}");
       }
     } else Console.WriteLine("SKIP farm screenshot tests (no test/data)");
+    var exp = new[]{ "UC High", "UC Low", "FC Low" };
+    var start = new Dictionary<string,int>{ ["UC High"]=144, ["UC Low"]=9 };
+    Check(string.Join(",", FarmCheck.MissingToConfirm(exp, start, null, new HashSet<string>()))=="FC Low", "start: ask about every core not found");
+    var confirmed = new HashSet<string>{ "FC Low" };
+    Check(FarmCheck.MissingToConfirm(exp, start, null, confirmed).Count==0, "start: confirmed-empty cores aren't asked again");
+    var baseL = new Dictionary<string,int>{ ["UC High"]=144, ["UC Low"]=9, ["FC Low"]=0 };
+    var endR = new Dictionary<string,int>{ ["UC High"]=156, ["FC Low"]=1 };
+    Check(string.Join(",", FarmCheck.MissingToConfirm(exp, endR, baseL, confirmed))=="UC Low", "end: ask only about cores that were there before and are gone now");
+    var endC = new Dictionary<string,int>{ ["UC High"]=156, ["FC Low"]=1, ["UC Low"]=0 };
+    var gains = FarmCheck.Gains(baseL, endC);
+    Check(gains["UC High"]==12 && gains["FC Low"]==1 && gains["UC Low"]==-9, "gains: new core from 0 counts +1, used-up stack counts -9");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
     var rr = FarmCheck.ParseEndWindow(endLines);
     Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");

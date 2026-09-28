@@ -258,6 +258,28 @@ namespace CAHelper
             return learned;
         }
 
+        /// Cores that should be checked with the player: at the start every known core that wasn't found;
+        /// later every core that was there before (count > 0) but isn't found now. Already-confirmed ones are skipped.
+        public static List<string> MissingToConfirm(IEnumerable<string> expected, IDictionary<string, int> found,
+                                                    IDictionary<string, int> baseline, ICollection<string> confirmedEmpty)
+        {
+            var candidates = baseline == null ? expected : baseline.Where(kv => kv.Value > 0).Select(kv => kv.Key);
+            return candidates.Where(n => !found.ContainsKey(n) && !confirmedEmpty.Contains(n)).Distinct().ToList();
+        }
+
+        /// Gains over every core seen at either end; a core missing on one side counts as 0 there.
+        public static Dictionary<string, int> Gains(IDictionary<string, int> baseline, IDictionary<string, int> current)
+        {
+            var g = new Dictionary<string, int>();
+            if (baseline == null || current == null) return g;
+            foreach (var k in baseline.Keys.Union(current.Keys))
+            {
+                int b = baseline.TryGetValue(k, out int bv) ? bv : 0, c = current.TryGetValue(k, out int cv) ? cv : 0;
+                if (b != c) g[k] = c - b;
+            }
+            return g;
+        }
+
         // ---------- dungeon end window ----------
         /// Cheap check before reading text: the end window is a dark panel with yellow text lines.
         public static bool EndWindowLikely(Img img)
