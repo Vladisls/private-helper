@@ -224,6 +224,7 @@ namespace CAHelper
             close.MouseEnter += (s, e) => close.ForeColor = Theme.Bad;
             close.MouseLeave += (s, e) => close.ForeColor = Theme.Muted;
             bar.Controls.Add(title); bar.Controls.Add(close);
+            titleBar = bar; closeLabel = close;
             Content.Padding = new Padding(10, 8, 10, 8);
             Controls.Add(Content); Controls.Add(bar);
             MakeDraggable(bar); MakeDraggable(title);
@@ -231,6 +232,16 @@ namespace CAHelper
         }
 
         protected void Touch() => Touched?.Invoke(this);
+        Panel titleBar; Label closeLabel;
+        /// Puts a small control in the title bar, left of the close button.
+        protected void AddTitleControl(Control c)
+        {
+            c.Dock = DockStyle.Right;
+            titleBar.Controls.Add(c);
+            // Docking runs from the last control to the first: close (far right), then this control, then the title (fill).
+            titleBar.Controls.SetChildIndex(closeLabel, titleBar.Controls.Count - 1);
+            titleBar.Controls.SetChildIndex(c, titleBar.Controls.Count - 2);
+        }
 
         protected override void OnPaint(PaintEventArgs e)
         {

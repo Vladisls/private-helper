@@ -24,6 +24,12 @@ namespace CAHelper
         static string InvRawPath => Path.Combine(Dir, "cabal-helper-farm-inventory-raw.png");
         readonly List<string> debug = new List<string>();
         string waitReason;                                                      // why the last inventory check didn't produce counts
+        readonly CheckBox debugBox = new CheckBox { Width = 22, Text = "", Cursor = Cursors.Hand, Margin = new Padding(0), Padding = new Padding(4, 0, 0, 0), BackColor = Theme.Line };
+        readonly ToolTip debugTip = new ToolTip { ShowAlways = true };
+        DebugOverlay overlay; DateTime lastProbe = DateTime.MinValue;
+        // what the overlay shows (screen pixels)
+        Rectangle ovInvCap; string ovInv = "not checked yet"; Grid? ovGrid; List<SlotRead> ovSlots = new List<SlotRead>(); string ovTab; Color ovTabColor = Color.Orange;
+        string ovEnd = "not seen"; Color ovEndColor = Color.HotPink; string ovLoot = "";
         string lastDebugKey;
 
         /// Diagnostics: a rolling text log of what the tracker decided (last 300 lines).
@@ -83,7 +89,10 @@ namespace CAHelper
             Content.Controls.Add(body); Content.Controls.Add(confirmBox); Content.Controls.Add(footer); Content.Controls.Add(startStop); Content.Controls.Add(status);
             startStop.Click += (s, e) => { Touch(); if (!running) StartSession(); else if (finishing) StopSession(); else RequestStop(); };
             footer.Click += (s, e) => { Touch(); Menu2().Show(footer, new Point(0, footer.Height)); };
-            Load += (s, e) => { LoadConfig(); Render(); };
+            debugTip.SetToolTip(debugBox, "Debug: draw what the tracker sees on screen");
+            debugBox.CheckedChanged += (s, e) => { Touch(); SetOverlay(debugBox.Checked); };
+            Load += (s, e) => { LoadConfig(); Render(); AddTitleControl(debugBox); };
+            FormClosed += (s, e) => SetOverlay(false);
             MakeDraggable(status);
         }
 
@@ -212,7 +221,8 @@ namespace CAHelper
         // ---------- once a second ----------
         public override AlertState Tick(DateTime now, TimeSpan idle, bool gameFocused, Settings s, bool blinkOn)
         {
-            if (!running || (now - lastCheck).TotalMilliseconds < 500) return default;
+            if (!running) { if (overlay != null) Probe(now); return default; }
+            if ((now - lastCheck).TotalMilliseconds < 500) return default;
             lastCheck = now;
             try
             {
@@ -223,6 +233,7 @@ namespace CAHelper
             }
             catch (Exception ex) { Warn("⚠ " + ex.Message); }
             Render();
+            DrawOverlay();
             return default;
         }
 
@@ -232,6 +243,7 @@ namespace CAHelper
             using (var bmp = PartyOcr.Capture(endArea))
             {
                 bool likely = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp));
+                ovEnd = likely ? (endLatched ? "counted, waiting for it to close" : "seen, reading…") : "not seen"; ovEndColor = likely ? Color.Lime : Color.HotPink;
                 if (!likely) { if (endLatched && endGoneSince == DateTime.MinValue) endGoneSince = now; if (endLatched && (now - endGoneSince).TotalSeconds >= 2) endLatched = false; return; }
                 endGoneSince = DateTime.MinValue;
                 if (endLatched) return;                                            // this window was already counted
@@ -243,13 +255,80 @@ namespace CAHelper
                     {
                         var lines = await PartyOcr.ReadLinesAsync(copy);
                         var r = FarmCheck.ParseEndWindow(lines);
-                        if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; Debug($"run counted: {r.Dungeon}, {r.Seconds} s, {r.Dp} DP"); if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
+                        if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; ovEnd = $"run counted: {r.Dungeon} {r.Seconds / 60}:{r.Seconds % 60:00}, {r.Dp} DP"; Debug($"run counted: {r.Dungeon}, {r.Seconds} s, {r.Dp} DP"); if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
                         else Debug("end-window check fired but the text wasn't a cleared window: " + string.Join(" | ", lines.Take(4)), "endmiss");
                     }
                     catch (Exception ex) { Warn("⚠ " + ex.Message); }
                     finally { copy.Dispose(); busyEnd = false; Render(); }
                 }));
             }
+        }
+
+        void SetOverlay(bool on)
+        {
+            if (on && overlay == null) { overlay = DebugOverlay.Create(); lastProbe = DateTime.MinValue; }
+            else if (!on && overlay != null) { overlay.Close(); overlay.Dispose(); overlay = null; }
+            DrawOverlay();
+        }
+
+        void DrawOverlay()
+        {
+            if (overlay == null) return;
+            overlay.Clear();
+            var invC = ovInvCap == Rectangle.Empty ? InvCapture : ovInvCap;
+            overlay.Boxes.Add(new DebugOverlay.Box { R = invArea, C = Color.DeepSkyBlue, Label = "Inventory: " + ovInv });
+            if (ovGrid is Grid g)
+            {
+                int gx = invC.X, gy = invC.Y;
+                for (int k = 0; k <= 8; k++)
+                {
+                    int x = gx + (int)Math.Round(g.X + k * g.PitchX), y = gy + (int)Math.Round(g.Y + k * g.PitchY);
+                    overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(x, gy + (int)g.Y), B = new Point(x, gy + (int)Math.Round(g.Y + 8 * g.PitchY)), C = Color.Lime });
+                    overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(gx + (int)g.X, y), B = new Point(gx + (int)Math.Round(g.X + 8 * g.PitchX), y), C = Color.Lime });
+                }
+                foreach (var sl in ovSlots)
+                    overlay.Tags.Add(new DebugOverlay.Note { P = new Point(gx + (int)(g.X + sl.Col * g.PitchX) + 2, gy + (int)(g.Y + sl.Row * g.PitchY) + 2),
+                        Text = Short(sl.Item) + " " + (sl.Count?.ToString() ?? "?"), C = sl.Count.HasValue ? Color.Yellow : Color.Red });
+                if (ovTab != null)
+                {
+                    double sc = g.Scale;
+                    var tr = new Rectangle(gx + (int)g.X, gy + (int)(g.Y - 58 * sc), (int)(8 * g.PitchX), (int)(38 * sc));
+                    overlay.Boxes.Add(new DebugOverlay.Box { R = tr, C = ovTabColor, Label = ovTab });
+                }
+            }
+            overlay.Boxes.Add(new DebugOverlay.Box { R = endArea, C = ovEndColor, Label = "End window: " + ovEnd });
+            overlay.Boxes.Add(new DebugOverlay.Box { R = lootArea, C = Color.Gold, Label = "Loot feed" + (ovLoot.Length > 0 ? ": " + ovLoot : "") });
+            overlay.KeepOnTop(); overlay.Invalidate();
+        }
+
+        /// Debug on, no session running: look at the areas once a second just to draw them (nothing is counted).
+        void Probe(DateTime now)
+        {
+            if ((now - lastProbe).TotalSeconds < 1) return;
+            lastProbe = now;
+            try
+            {
+                using (var bmp = PartyOcr.Capture(InvCapture))
+                {
+                    var img = PartyOcr.ToImg(bmp); int top = img.H - invArea.Height;
+                    ovInvCap = InvCapture;
+                    var g = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, ExpectedPitch);
+                    if (!FarmCheck.InventoryOpen(img, g) && Math.Abs(ExpectedPitch - FarmCheck.RefPitch) > 3) g = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, FarmCheck.RefPitch);
+                    if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null; }
+                    else
+                    {
+                        var (g2, slots) = FarmCheck.BestRead(img, g, icons, Digits);
+                        ovGrid = g2; ovSlots = slots; ovInv = $"open, contrast {g.Score:0.00}, {slots.Select(x => x.Item).Distinct().Count()} core types";
+                        double td = coreTab == null ? -1 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, g2));
+                        ovTab = td < 0 ? "Tab: not learned yet" : td <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({td:0.0})" : $"Other tab? ({td:0.0} > {FarmCheck.TabMatchMax})";
+                        ovTabColor = td >= 0 && td > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
+                    }
+                }
+                using (var bmp = PartyOcr.Capture(endArea))
+                { bool seen = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp)); ovEnd = seen ? "seen" : "not seen"; ovEndColor = seen ? Color.Lime : Color.HotPink; }
+            }
+            catch (Exception ex) { ovInv = "error: " + ex.Message; }
+            DrawOverlay();
         }
 
         /// Searches the whole screen for the inventory grid (every 3 s at most, only while waiting for counts),
@@ -299,6 +378,7 @@ namespace CAHelper
                     if (!FarmCheck.InventoryOpen(img, g0))
                     {
                         invOpenSince = DateTime.MinValue; Debug($"inventory not open in its area (grid contrast {g0.Score:0.00}, needs 1.70)", "closed");
+                        ovInv = $"not visible (contrast {g0.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null;
                         waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
                         if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
                         return;
@@ -308,6 +388,7 @@ namespace CAHelper
                 if (!FarmCheck.InventoryOpen(img, grid.Value))
                 {
                     invOpenSince = DateTime.MinValue; Debug("inventory closed (or moved)", "closed");
+                    ovInv = "closed"; ovGrid = null; ovSlots.Clear(); ovTab = null;
                     waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
                     if (baseline == null || finishing) TryLocateInventory(now);
                     return;
@@ -320,6 +401,9 @@ namespace CAHelper
                 var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits);
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
+                ovInvCap = InvCapture; ovGrid = g; ovSlots = slots; ovInv = $"open, {found} core types";
+                ovTab = coreTab == null ? "Tab: learning from this read" : tabDist <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({tabDist:0.0})" : $"Other tab? ({tabDist:0.0})";
+                ovTabColor = tabDist > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
                 if (tabDist > FarmCheck.TabMatchMax)
                 {
                     // Most of the cores recognised: this IS the core tab, the saved tab strip is stale. Re-learn it.
@@ -367,6 +451,7 @@ namespace CAHelper
                     {
                         var lines = (await PartyOcr.ReadLinesAsync(copy)).Where(l => l.IndexOf("Obtain", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
                         var fresh = FarmCheck.NewLines(lastLoot, lines);
+                        if (fresh.Count > 0) ovLoot = "new: " + fresh.Last();
                         if (lastLoot != null)
                             foreach (var l in fresh)
                             {

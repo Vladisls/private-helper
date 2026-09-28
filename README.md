@@ -132,6 +132,9 @@ FARM TRACKER
 - After changing resolution: set the inventory area again (a box around
   the whole inventory window is fine) and "Learn core icons from the open inventory". Learning
   checks itself and keeps the old icons if it doesn't work.
+- Debug checkbox (Farm Tracker title bar): draws on screen what the tracker sees - inventory
+  area and detected grid with each slot's result, the tab check, the end-window area (seen /
+  run counted) and the loot-feed area with the last new line. Works before a session too.
 - Something off? Areas & learning > Diagnostics shows what the tracker decided (text log) and
   the last inventory read as a picture with the grid and each slot's result drawn on it.
   "Reset areas and everything learned" starts over.
