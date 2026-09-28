@@ -47,7 +47,14 @@ namespace CAHelper
                 byte[] exe = DownloadBytes(url + "CabalHelper.exe?t=" + DateTime.UtcNow.Ticks, 60000);
                 string got = Sha256(exe);
                 if (!string.Equals(got, sha, StringComparison.OrdinalIgnoreCase))
-                { message = "Download checksum did not match, update skipped"; return Result.Failed; }
+                {
+                    // GitHub can serve the new version file with the old exe for a few minutes: try once more.
+                    System.Threading.Thread.Sleep(20000);
+                    exe = DownloadBytes(url + "CabalHelper.exe?r=" + DateTime.UtcNow.Ticks, 60000);
+                    got = Sha256(exe);
+                    if (!string.Equals(got, sha, StringComparison.OrdinalIgnoreCase))
+                    { message = "Update " + Short(latest) + " is published but the download didn't match yet (GitHub cache). Restart in a few minutes."; return Result.Failed; }
+                }
 
                 File.WriteAllBytes(NewPath, exe);
                 if (File.Exists(OldPath)) File.Delete(OldPath);

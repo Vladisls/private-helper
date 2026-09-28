@@ -387,7 +387,7 @@ namespace CAHelper
                 using (OverlayHidden())
                 using (var bmp = PartyOcr.Capture(InvCapture))
                 {
-                    var img = PartyOcr.ToImg(bmp); int top = img.H - invArea.Height;
+                    var img = PartyOcr.ToImg(bmp); int top = invArea.Y - InvCapture.Y;
                     ovInvCap = InvCapture;
                     var g = FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch);
                     if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null; }
@@ -477,12 +477,20 @@ namespace CAHelper
             finally { busyLocate = false; }
         }
 
-        /// The inventory area plus the tab strip above it (so the active tab can be checked).
-        int TabMargin => (int)Math.Round(70 * invArea.Height / 614.0);
-        /// (Clipped at the top of all monitors, which is below 0 when a monitor sits above the main one.)
+        /// The inventory area plus the window parts the checks need: the title bar with the close cross above the
+        /// grid (~92 px at 2560x1440) and the button row below it (button top ~20 px under the grid, 56 px tall).
+        double UiScale => invArea.Height / 640.0;                                   // area = 8 slots + 2 x 0.2 slot margin
+        int TabMargin => (int)Math.Round(115 * UiScale);
+        int ButtonMargin => (int)Math.Round(95 * UiScale);
+        /// (Clipped to the monitors, which can start below 0 when a monitor sits above the main one.)
         Rectangle InvCapture
         {
-            get { int top = Math.Max(PartyOcr.PhysicalVirtualScreen().Y, invArea.Y - TabMargin); return new Rectangle(invArea.X, top, invArea.Width, invArea.Bottom - top); }
+            get
+            {
+                var v = PartyOcr.PhysicalVirtualScreen();
+                int top = Math.Max(v.Y, invArea.Y - TabMargin), bottom = Math.Min(v.Bottom, invArea.Bottom + ButtonMargin);
+                return new Rectangle(invArea.X, top, invArea.Width, bottom - top);
+            }
         }
 
         void CheckInventory(DateTime now)
@@ -490,7 +498,7 @@ namespace CAHelper
             using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
-                int top = img.H - invArea.Height;
+                int top = invArea.Y - InvCapture.Y;
                 // The cached grid can be stale (inventory moved) or wrong: search again before calling it closed.
                 bool hadGrid = grid != null;
                 var cur = FarmCheck.CurrentGrid(img, grid, () => FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch), out bool replaced);
@@ -735,7 +743,7 @@ namespace CAHelper
             using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
-                var g = FarmCheck.FindGridNear(img, 0, img.H - invArea.Height, img.W, invArea.Height, KnownPitch);
+                var g = FarmCheck.FindGridNear(img, 0, invArea.Y - InvCapture.Y, img.W, invArea.Height, KnownPitch);
                 if (!FarmCheck.InventoryOpen(img, g))
                 {
                     Debug($"learn icons: inventory not in its area (grid contrast {g.Score:0.00}), searching all screens");
@@ -757,7 +765,7 @@ namespace CAHelper
                 // Check the new icons before keeping them: every learned core must be found again, in its own slot.
                 var verify = FarmCheck.ReadInventory(img, g, learned, Digits);
                 bool ok = learned.Count >= 5 && learned.All(l => verify.Any(v => v.Item == l.Item1));
-                SaveAnnotated(bmp, g, verify, img.H - invArea.Height);
+                SaveAnnotated(bmp, g, verify, invArea.Y - InvCapture.Y);
                 Debug($"learn icons: {learned.Count} learned, empty slots: {(emptySlots.Count == 0 ? "none" : string.Join(", ", emptySlots))}, verify {(ok ? "OK" : "FAILED")}");
                 if (!ok)
                 {
