@@ -363,6 +363,22 @@ static class T {
         var badKeep = first.grid; badKeep.X -= 8 * badKeep.Scale; badKeep.Y -= 8 * badKeep.Scale;   // a previously kept grid that reads badly
         var fixedUp = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), digs, keep: badKeep);
         Check(fixedUp.slots.Count(x => x.Cells.Count > 0) >= 9, "a kept grid that reads badly is replaced by a clearly better one"); }
+      // button/cross anchor on every capture
+      foreach (var (nm, file, box, expect10) in new[]{ ("inv", "inv.bin", (1912,248,612,612), "3,208,144,14,9,5,34,158,16,2"), ("mis", "mis.bin", (815,160,620,620), "3,223,172,14,9,5,34,158,16,2"), ("off", "off.bin", (487,143,658,642), null) }) {
+        var fpath = System.IO.Path.Combine(dataDir, file); if (!System.IO.File.Exists(fpath)) continue;
+        var cim = nm == "inv" ? inv : Load(fpath);
+        var snap = FarmCheck.FindGrid(cim, box.Item1, box.Item2, box.Item3, box.Item4);
+        var wrongSnap = snap; wrongSnap.X += 9; wrongSnap.Y -= 11;               // a wrong snap, like the twitching one
+        var anchored = FarmCheck.AnchorByButtons(cim, wrongSnap, out bool okA, out string infoA);
+        var swB = System.Diagnostics.Stopwatch.StartNew(); var byBtn = FarmCheck.LocateByButton(cim, 1.0, out double dBtn); long msBtn = swB.ElapsedMilliseconds;
+        Console.WriteLine($"ANCHOR {nm}: snap {snap.X:0},{snap.Y:0}; from a wrong snap -> {infoA}; whole-image locate by button -> {(byBtn.HasValue ? $"{byBtn.Value.X:0},{byBtn.Value.Y:0}" : "none")} (diff {dBtn:0.0}, {msBtn} ms)");
+        if (expect10 != null) {
+          var read = FarmCheck.ReadInventory(cim, anchored, FarmCheck.DefaultIcons(), digs).OrderBy(x => x.Row * 8 + x.Col).ToList();
+          string got = string.Join(",", read.Select(x => x.Count?.ToString() ?? "?"));
+          Check(okA && got == expect10, $"{nm}: grid anchored on the button reads all counts ({got})");
+          Check(byBtn.HasValue && Math.Abs(byBtn.Value.X - anchored.X) <= 2 && Math.Abs(byBtn.Value.Y - anchored.Y) <= 2, $"{nm}: locating by the button alone finds the same grid");
+        } else Check(okA && Math.Abs(anchored.X - 506) <= 2 && Math.Abs(anchored.Y - 158) <= 2, $"{nm}: anchored grid matches the frame snap 506,158 ({anchored.X:0},{anchored.Y:0})");
+      }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642

@@ -64,6 +64,7 @@ namespace CAHelper
         List<string> lastLoot; long lootPrint;
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
         Grid? grid; Grid? readGrid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
+        string lastAnchorInfo, ovAnchor = ""; bool ovAnchorOk;
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot, busyInv; int stripSaves;
@@ -377,16 +378,25 @@ namespace CAHelper
             {
                 var screen = PartyOcr.PhysicalVirtualScreen();                    // every monitor
                 Img img; List<List<OcrWord>> lines = null; string ocrError = null;
+                Grid? found = null; string how = null; var titleRect = Rectangle.Empty;
                 using (var bmp = PartyOcr.Capture(screen))
                 {
                     img = PartyOcr.ToImg(bmp);
-                    try { lines = await PartyOcr.ReadWordsTiledAsync(bmp); }
-                    catch (Exception ex) { ocrError = ex.Message; }
+                    // 0) the sword button under the inventory: unique, never animates, no text reading needed
+                    double btnScale = KnownPitch > 0 ? KnownPitch / FarmCheck.RefPitch : 1.0;
+                    var byButton = FarmCheck.LocateByButton(img, btnScale, out double btnDiff);
+                    if (byButton == null && Math.Abs(btnScale - 1.0) > 0.01) byButton = FarmCheck.LocateByButton(img, 1.0, out btnDiff);
+                    if (byButton != null) { found = byButton; how = "sword button"; Debug($"sword button found on screen (diff {btnDiff:0.0})"); }
+                    else
+                    {
+                        try { lines = await PartyOcr.ReadWordsTiledAsync(bmp); }
+                        catch (Exception ex) { ocrError = ex.Message; }
+                    }
                 }
-                Grid? found = null; string how = null; var titleRect = Rectangle.Empty;
                 var titles = lines == null ? new List<OcrWord>() : FarmCheck.InventoryTitles(lines);
                 foreach (var t in titles)
                 {
+                    if (found != null) break;
                     var tg = FarmCheck.FindGridBelowTitle(img, t);
                     if (tg == null) continue;
                     found = tg; how = "title text";
@@ -399,7 +409,7 @@ namespace CAHelper
                     if (found == null && KnownPitch > 0) found = FarmCheck.LocateInventory(img, 0);   // known size stale (resolution changed)
                     if (found != null) how = "band search";
                 }
-                string titleInfo = lines == null ? $"text reader failed ({ocrError})"
+                string titleInfo = how == "sword button" ? "button match" : lines == null ? $"text reader failed ({ocrError})"
                                  : titles.Count == 0 ? "no \"Inventory\" title read"
                                  : $"{titles.Count} \"Inventory\" title(s) at " + string.Join(" ", titles.Select(t => $"{screen.X + t.X:0},{screen.Y + t.Y:0} h{t.H:0}")) + (how == "title text" ? "" : " but no grid below");
                 if (found == null) { Debug($"searched all screens ({screen.X},{screen.Y} {screen.Width}x{screen.Height}): {titleInfo}; no inventory grid visible", "locate-none"); return false; }
@@ -450,7 +460,12 @@ namespace CAHelper
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
                 double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
-                var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits, keep: readGrid);
+                var anchored = FarmCheck.AnchorByButtons(img, grid.Value, out bool anchorOk, out string anchorInfo);
+                if (anchorInfo != lastAnchorInfo) { Debug("anchor: " + anchorInfo, "anchor"); lastAnchorInfo = anchorInfo; }
+                ovAnchor = anchorInfo; ovAnchorOk = anchorOk;
+                var (g, slots) = anchorOk
+                    ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, Digits))       // pinned: no position search
+                    : FarmCheck.BestRead(img, grid.Value, icons, Digits, keep: readGrid);
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
                 ovInvCap = InvCapture; ovGrid = g; ovSlots = slots; ovInv = $"open, {found} core types";
