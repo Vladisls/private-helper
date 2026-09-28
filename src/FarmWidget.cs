@@ -66,7 +66,7 @@ namespace CAHelper
         Grid? grid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
-        bool busyEnd, busyLoot;
+        bool busyEnd, busyLoot, busyInv;
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
         readonly FarmCheck.CountSmoother smoother = new FarmCheck.CountSmoother();
@@ -486,13 +486,38 @@ namespace CAHelper
                 if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
                 Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col}={(x.Count?.ToString() ?? "?")} (icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.Count)));
                 grid = g; lastInvImg = img; lastSlots = slots;
-                var counts = new Dictionary<string, int>();
-                foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
-                if (slots.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
-                smoother.Add(counts); readsSinceStart++;
-                var stable = smoother.Stable();
-                // Take a decision only once the smoother has a few reads; missing cores need MissingAfter absent reads.
-                if (readsSinceStart >= 2 || baseline != null) ApplyRead(stable, smoother.Gone());
+                // Counts: the text reader is primary (it doesn't depend on digit shapes or the icon shine);
+                // the shape matcher's value is the fallback for bands the reader can't read.
+                if (busyInv) return;
+                busyInv = true;
+                var copy = (Bitmap)bmp.Clone(); var gridNow = g; var slotsNow = slots;
+                BeginInvoke((Action)(async () =>
+                {
+                    int?[] ocr = null;
+                    try { ocr = await PartyOcr.ReadDigitBandsAsync(copy, slotsNow.Select(sl => FarmCheck.DigitBand(gridNow, sl.Row, sl.Col)).ToList()); }
+                    catch (Exception ex) { Debug("text reader failed on the counts: " + ex.Message, "ocrfail"); }
+                    finally { copy.Dispose(); }
+                    try
+                    {
+                        int agree = 0, differ = 0;
+                        for (int i = 0; i < slotsNow.Count; i++)
+                        {
+                            int? o = ocr != null && i < ocr.Length ? ocr[i] : null;
+                            if (o.HasValue && slotsNow[i].Count.HasValue) { if (o == slotsNow[i].Count) agree++; else differ++; }
+                            if (o.HasValue) { slotsNow[i].Count = o; slotsNow[i].Cells.Add("ocr"); }
+                        }
+                        if (ocr != null) Debug($"counts by text reader: {ocr.Count(v => v.HasValue)}/{slotsNow.Count} read, {agree} agree with shapes, {differ} differ", "ocr:" + agree + "/" + differ);
+                        var counts = new Dictionary<string, int>();
+                        foreach (var sl in slotsNow) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
+                        if (slotsNow.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
+                        smoother.Add(counts); readsSinceStart++;
+                        var stable = smoother.Stable();
+                        // Take a decision only once the smoother has a few reads; missing cores need MissingAfter absent reads.
+                        if (readsSinceStart >= 2 || baseline != null) ApplyRead(stable, smoother.Gone());
+                        ovSlots = slotsNow; Render();
+                    }
+                    finally { busyInv = false; }
+                }));
             }
         }
 

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -220,6 +221,35 @@ namespace CAHelper
                 return new Img(bmp.Width, bmp.Height, buf);
             }
             finally { bmp.UnlockBits(d); }
+        }
+
+        public const int DigitEnlarge = 3, DigitGap = 6;
+
+        /// Reads the stack counts of several slots with the text reader in one call: the digit bands are cut out,
+        /// cleaned to dark digits on light, enlarged and stacked into one strip. null entries = unreadable.
+        public static async Task<int?[]> ReadDigitBandsAsync(Bitmap capture, IList<Rectangle> bands)
+        {
+            if (bands.Count == 0) return new int?[0];
+            int bw = bands.Max(b => b.Width), bh = bands.Max(b => b.Height);
+            using (var strip = new Bitmap(bw, bands.Count * (bh + DigitGap), PixelFormat.Format32bppArgb))
+            {
+                using (var g = Graphics.FromImage(strip))
+                {
+                    g.Clear(Color.Black);
+                    for (int i = 0; i < bands.Count; i++)
+                    {
+                        var b = Rectangle.Intersect(bands[i], new Rectangle(0, 0, capture.Width, capture.Height));
+                        if (b.Width > 0 && b.Height > 0) g.DrawImage(capture, new Rectangle(0, i * (bh + DigitGap), b.Width, b.Height), b, GraphicsUnit.Pixel);
+                    }
+                }
+                using (var big = Enlarge(strip, DigitEnlarge))
+                using (var clean = Clean(big, 150, 245, 1.5))
+                {
+                    var lines = await ReadWordsAsync(clean, 1);
+                    var words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l);
+                    return FarmCheck.MapStripWords(words, bands.Count, bh, DigitGap, DigitEnlarge);
+                }
+            }
         }
 
         static Windows.Media.Ocr.OcrEngine CreateEngine()

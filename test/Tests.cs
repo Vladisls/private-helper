@@ -377,6 +377,14 @@ static class T {
     Check(!sm.Stable().ContainsKey("FC Med") && sm.Gone().SequenceEqual(new[]{"FC Med"}), "missing in 3 reads in a row: gone");
     sm.Add(new Dictionary<string,int>{ ["FC High"]=158, ["FC Med"]=16 });
     Check(sm.Stable().ContainsKey("FC Med") && sm.Gone().Count==0, "seen again: back, question would clear");
+    // digit strip mapping: 3 bands of 28 px, gap 6, enlarged 3x
+    var stripWords = new List<OcrWord>{ new OcrWord("158", 40, 3*3, 60, 45), new OcrWord("l4", 50, 3*(34+3), 30, 45), new OcrWord("2", 60, 3*(68+5), 15, 40), new OcrWord("x", 0, 3*(200), 10, 10) };
+    var mapped = FarmCheck.MapStripWords(stripWords, 3, 28, 6, 3);
+    Check(mapped[0]==158 && mapped[1]==14 && mapped[2]==2, $"strip words map back to their bands (got {mapped[0]},{mapped[1]},{mapped[2]})");
+    var split = FarmCheck.MapStripWords(new[]{ new OcrWord("1", 30, 6, 15, 45), new OcrWord("58", 48, 6, 40, 45) }, 1, 28, 6, 3);
+    Check(split[0]==158, "a count the reader splits into two words is joined in x order");
+    var gi0 = new Grid { X = 1919, Y = 253, PitchX = 76.75, PitchY = 76.75 }; var band = FarmCheck.DigitBand(gi0, 0, 1);
+    Check(band.Width >= 55 && band.Height >= 26 && band.X > gi0.X + gi0.PitchX && band.X < gi0.X + 2 * gi0.PitchX, "digit band sits inside its slot");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
     var rr = FarmCheck.ParseEndWindow(endLines);
     Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");

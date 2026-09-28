@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Drawing;
 
 namespace CAHelper
 {
@@ -438,6 +439,37 @@ namespace CAHelper
             for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) if (Dark(img, x + dx, y + dy)) return true;
             return false;
         }
+        /// The strip of a slot where its stack count is drawn (image coordinates), for the text reader.
+        public static Rectangle DigitBand(Grid g, int r, int c)
+        {
+            var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;
+            return new Rectangle(sx + (int)Math.Round(14 * s), sy + (int)Math.Round(42 * s), (int)Math.Round(60 * s), (int)Math.Round(28 * s));
+        }
+
+        /// Maps text-reader words back to the digit bands they were cut from. Bands are stacked top to bottom in a
+        /// strip, each `bandH` tall with `gap` between, and the strip was enlarged `enlarge` times before reading.
+        /// Returns one count per band (null = nothing readable there).
+        public static int?[] MapStripWords(IEnumerable<OcrWord> words, int bands, int bandH, int gap, int enlarge)
+        {
+            var result = new int?[bands];
+            var text = new string[bands];
+            foreach (var w in words.OrderBy(w => w.X))
+            {
+                double cy = (w.Y + w.H / 2) / enlarge;
+                int i = (int)(cy / (bandH + gap));
+                if (i < 0 || i >= bands || cy - i * (bandH + gap) > bandH) continue;
+                text[i] = (text[i] ?? "") + w.Text;
+            }
+            for (int i = 0; i < bands; i++)
+            {
+                if (text[i] == null) continue;
+                // keep digits; readers sometimes see l/I/| for 1 and O for 0
+                var digits = new string(text[i].Select(ch => ch == 'l' || ch == 'I' || ch == '|' ? '1' : ch == 'O' || ch == 'o' ? '0' : ch).Where(char.IsDigit).ToArray());
+                if (digits.Length >= 1 && digits.Length <= 5) result[i] = int.Parse(digits, CultureInfo.InvariantCulture);
+            }
+            return result;
+        }
+
         public static string Cell(Img img, Grid g, int r, int c, int i)
         {
             var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;

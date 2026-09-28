@@ -127,7 +127,9 @@ FARM TRACKER
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
-- A count shown as unreadable (all digits 0-9 are built in now; other resolutions may need it):
+- Stack counts are read with Windows' text reader (the digit strips are cut out, cleaned and
+  enlarged, one call per scan); the built-in digit shapes are only the fallback.
+- A count shown as unreadable:
   Areas & learning > Fix counts, type the real number once and the digit is learned.
 - The inventory doesn't have to be where the area says: while waiting for core counts the
   tracker looks at all monitors every 3 s. It reads the screen text for the window title
