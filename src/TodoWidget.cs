@@ -71,8 +71,7 @@ namespace CAHelper
         void OpenListInNotepad()
         {
             if (!File.Exists(Todo.ListPath)) { try { File.WriteAllText(Todo.ListPath, Todo.DefaultList); } catch { } }
-            try { System.Diagnostics.Process.Start("notepad.exe", "\"" + Todo.ListPath + "\""); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "Cabal Helper"); }
+            Files.OpenInTextEditor(Todo.ListPath);
         }
 
         ContextMenuStrip ListMenu()
@@ -82,7 +81,7 @@ namespace CAHelper
             m.Items.Add("Reset to the built-in task list", null, (s, e) => LoadPreset(TodoPresets.CatalogName, TodoPresets.Catalog));
             m.Items.Add(new ToolStripLabel("Current list: " + presetName) { ForeColor = Color.Gray });
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add("Edit list in Notepad", null, (s, e) => OpenListInNotepad());
+            m.Items.Add("Edit list in text editor", null, (s, e) => OpenListInNotepad());
             m.Items.Add("Clear today's progress", null, (s, e) => { foreach (var it in items) if (!it.Weekly) it.Count = 0; SaveProgress(); BeginInvoke((Action)Rebuild); });
             var s0 = Program.CurrentSettings;
             m.Items.Add(new ToolStripLabel($"Daily reset {s0.DailyResetTime:hh\\:mm} · weekly {s0.WeeklyResetDay} (settings file)") { ForeColor = Color.Gray });

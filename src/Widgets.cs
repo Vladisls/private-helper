@@ -123,6 +123,33 @@ namespace CAHelper
         }
     }
 
+    static class Files
+    {
+        [System.Runtime.InteropServices.DllImport("shlwapi.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern uint AssocQueryString(int flags, int str, string assoc, string extra, System.Text.StringBuilder outBuf, ref uint outSize);
+
+        /// Opens a file in the user's text editor (the app that opens .txt files), Notepad as fallback.
+        public static void OpenInTextEditor(string path)
+        {
+            if (!System.IO.File.Exists(path)) { MessageBox.Show("Nothing to show yet:\n" + path, "Cabal Helper"); return; }
+            string exe = null;
+            try
+            {
+                var sb = new System.Text.StringBuilder(512); uint size = 512;
+                if (AssocQueryString(0, 2 /* ASSOCSTR_EXECUTABLE */, ".txt", "open", sb, ref size) == 0) exe = sb.ToString();
+            }
+            catch { }
+            if (string.IsNullOrEmpty(exe) || !System.IO.File.Exists(exe)) exe = "notepad.exe";
+            try { System.Diagnostics.Process.Start(exe, "\"" + path + "\""); }
+            catch { try { System.Diagnostics.Process.Start("notepad.exe", "\"" + path + "\""); } catch (Exception ex) { MessageBox.Show(ex.Message, "Cabal Helper"); } }
+        }
+
+        public static void OpenFolder(string path)
+        {
+            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + path + "\""); } catch { }
+        }
+    }
+
     static class Theme
     {
         public static readonly Color Panel = Color.FromArgb(26, 31, 38), Line = Color.FromArgb(42, 49, 59),

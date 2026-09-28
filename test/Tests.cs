@@ -199,6 +199,12 @@ static class T {
         var got = string.Join(",", FarmCheck.BestRead(inv, g, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
         Check(got == expect, $"inventory read from a rough box {bx},{by}: grid {g.X},{g.Y} pitch {g.PitchX:0.00} -> {got}");
       }
+      // boxes around the WHOLE inventory window, as a player might drag them
+      foreach (var (bx,by,bw,bh) in new[]{ (1890,130,660,900), (1880,180,670,720), (1895,230,640,640) }) {
+        var gw = FarmCheck.FindGrid(inv, bx, by, bw, bh);
+        var gotw = string.Join(",", FarmCheck.BestRead(inv, gw, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
+        Check(gotw == expect && Math.Abs(gw.X - 1919) <= 3 && Math.Abs(gw.Y - 253) <= 3, $"inventory read from a whole-window box {bx},{by},{bw}x{bh}: grid {gw.X:0},{gw.Y:0} pitch {gw.PitchX:0.00}");
+      }
       var gi = FarmCheck.FindGrid(inv, 1912, 248, 612, 612);
       Check(FarmCheck.InventoryOpen(inv, gi) && !FarmCheck.InventoryOpen(end, gi) && !FarmCheck.InventoryOpen(tmr, gi), "inventory-open check: yes on the inventory shot, no on the others");
       Check(FarmCheck.EndWindowLikely(Crop(end, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(tmr, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(inv, 209, 284, 630, 745)),
@@ -222,7 +228,7 @@ static class T {
       }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
-        var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459);
+        var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459, 8, 8, FarmCheck.RefPitch * 0.75);
         var got2 = string.Join(",", FarmCheck.BestRead(small, g2, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
         Console.WriteLine($"INFO 1920x1080 (resized screenshot): grid pitch {g2.PitchX:0.00} -> {got2}");
       }

@@ -120,11 +120,7 @@ namespace CAHelper
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Test flash (5 seconds)", null, (s, e) => testFlashUntil = DateTime.Now.AddSeconds(5));
             m.Items.Add("Settings…", null, (s, e) => OpenSettings());
-            m.Items.Add("Edit settings file", null, (s, e) =>
-            {
-                try { System.Diagnostics.Process.Start("notepad.exe", "\"" + Settings.IniPath + "\""); }
-                catch (Exception ex) { MessageBox.Show(ex.Message, "Cabal Helper"); }
-            });
+            m.Items.Add("Edit settings file", null, (s, e) => Files.OpenInTextEditor(Settings.IniPath));
             m.Items.Add("Reload settings", null, (s, e) => ApplySettings(showSummary: true));
             m.Items.Add("Check for updates", null, (s, e) => CheckForUpdatesNow());
             m.Items.Add(new ToolStripLabel("Cabal Helper v" + Updater.Short(Updater.Current)) { ForeColor = Color.Gray });

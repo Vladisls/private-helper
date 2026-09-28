@@ -35,6 +35,10 @@ namespace CAHelper
     {
         public static string LastCapturePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-party-last.png");
 
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+        /// Real screen height in pixels, even with Windows display scaling on.
+        public static int PhysicalScreenHeight() { using (new DpiAware()) return GetSystemMetrics(1); }
+
         public static Bitmap Capture(Rectangle area)
         {
             using (new DpiAware())

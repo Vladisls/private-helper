@@ -19,6 +19,22 @@ namespace CAHelper
         static string Dir => AppDomain.CurrentDomain.BaseDirectory;
         static string ConfigPath => Path.Combine(Dir, "cabal-helper-farm.txt");
         static string LogPath => Path.Combine(Dir, "cabal-helper-farm-log.csv");
+        static string DebugPath => Path.Combine(Dir, "cabal-helper-farm-debug.txt");
+        static string InvShotPath => Path.Combine(Dir, "cabal-helper-farm-inventory.png");
+        readonly List<string> debug = new List<string>();
+        string lastDebugKey;
+
+        /// Diagnostics: a rolling text log of what the tracker decided (last 300 lines).
+        void Debug(string msg, string dedupeKey = null)
+        {
+            if (dedupeKey != null && dedupeKey == lastDebugKey) return;         // don't repeat the same "skipped" every 500 ms
+            lastDebugKey = dedupeKey;
+            debug.Add(DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture) + "  " + msg);
+            if (debug.Count > 300) debug.RemoveRange(0, debug.Count - 300);
+            try { File.WriteAllLines(DebugPath, debug); } catch { }
+        }
+
+        double ExpectedPitch => FarmCheck.RefPitch * PartyOcr.PhysicalScreenHeight() / 1440.0;
 
         // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
         Rectangle invArea = new Rectangle(1905, 240, 620, 615), endArea = new Rectangle(209, 284, 630, 745), lootArea = new Rectangle(2105, 1195, 395, 160);
@@ -104,15 +120,30 @@ namespace CAHelper
         ContextMenuStrip Menu2()
         {
             var m = new ContextMenuStrip();
-            m.Items.Add("Set inventory area (the core tab's slot grid)…", null, (s, e) => Pick(ref invArea, "Drag a box around the inventory slot grid (all 8 x 8 slots). Esc cancels.", resetGrid: true));
+            m.Items.Add("Set inventory area (the core tab's slot grid)…", null, (s, e) => Pick(ref invArea, "Drag a box around the inventory's slot grid (the whole inventory window is fine too). Esc cancels.", resetGrid: true));
             m.Items.Add("Set end-window area (dungeon cleared window)…", null, (s, e) => Pick(ref endArea, "Drag a box around the dungeon end window (\"Quest Dungeon Cleared!\"). Esc cancels."));
             m.Items.Add("Set loot-feed area (\"Obtain ... x 1\" lines)…", null, (s, e) => Pick(ref lootArea, "Drag a box around the loot messages (\"Obtain ... x 1\"). Esc cancels."));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Learn core icons from the open inventory", null, (s, e) => LearnIcons());
             m.Items.Add("Fix counts (and teach digits)…", null, (s, e) => FixCounts());
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add("Open farm log (CSV)", null, (s, e) => { if (File.Exists(LogPath)) try { System.Diagnostics.Process.Start(LogPath); } catch { } });
+            m.Items.Add("Open farm log", null, (s, e) => Files.OpenInTextEditor(LogPath));
+            m.Items.Add("Diagnostics: what the tracker decided", null, (s, e) => Files.OpenInTextEditor(DebugPath));
+            m.Items.Add("Diagnostics: last inventory read (picture)", null, (s, e) => { if (File.Exists(InvShotPath)) Files.OpenFolder(InvShotPath); else MessageBox.Show("No inventory read yet.", "Farm Tracker"); });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("Reset areas and everything learned…", null, (s, e) => ResetAll());
             return m;
+        }
+
+        void ResetAll()
+        {
+            if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons, digits and core tab are forgotten. The farm log is kept.",
+                                "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
+            icons = FarmCheck.Icons.ToList(); extraDigits.Clear(); coreTab = null; grid = null;
+            try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
+            Debug("RESET: areas back to defaults, learned icons/digits/core tab forgotten");
+            Render();
         }
 
         void Pick(ref Rectangle area, string msg, bool resetGrid = false)
@@ -120,13 +151,14 @@ namespace CAHelper
             var r = AreaPicker.Pick(msg);
             if (r == null) return;
             area = r.Value; if (resetGrid) { grid = null; coreTab = null; }
+            Debug($"area set: {r.Value.X},{r.Value.Y} {r.Value.Width}x{r.Value.Height}");
             SaveConfig(); Render();
         }
 
         // ---------- session ----------
         void StartSession()
         {
-            running = true; started = DateTime.Now; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
+            Debug("session started"); running = true; started = DateTime.Now; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
             confirmedEmpty.Clear(); pending = null;
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
@@ -146,6 +178,7 @@ namespace CAHelper
 
         void StopSession()
         {
+            Debug($"session stopped: {runs.Count} runs, gains " + string.Join(", ", Gains().Select(k => Short(k.Key) + (k.Value > 0 ? "+" : "") + k.Value)));
             running = false; finishing = false; startStop.Text = "Start session";
             WriteLog(); Render();
         }
@@ -205,7 +238,8 @@ namespace CAHelper
                     {
                         var lines = await PartyOcr.ReadLinesAsync(copy);
                         var r = FarmCheck.ParseEndWindow(lines);
-                        if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
+                        if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; Debug($"run counted: {r.Dungeon}, {r.Seconds} s, {r.Dp} DP"); if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
+                        else Debug("end-window check fired but the text wasn't a cleared window: " + string.Join(" | ", lines.Take(4)), "endmiss");
                     }
                     catch (Exception ex) { Warn("⚠ " + ex.Message); }
                     finally { copy.Dispose(); busyEnd = false; Render(); }
@@ -224,18 +258,26 @@ namespace CAHelper
             {
                 var img = PartyOcr.ToImg(bmp);
                 int top = img.H - invArea.Height;
-                if (grid == null) { var g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height); if (!FarmCheck.InventoryOpen(img, g0)) { invOpenSince = DateTime.MinValue; return; } grid = g0; }
-                if (!FarmCheck.InventoryOpen(img, grid.Value)) { invOpenSince = DateTime.MinValue; return; }
+                if (grid == null)
+                {
+                    var g0 = FarmCheck.FindGrid(img, 0, top, img.W, invArea.Height, 8, 8, ExpectedPitch);
+                    if (!FarmCheck.InventoryOpen(img, g0)) { invOpenSince = DateTime.MinValue; Debug($"inventory not open (grid contrast {g0.Score:0.00}, needs 1.70)", "closed"); return; }
+                    grid = g0; Debug($"grid found at {g0.X:0},{g0.Y:0} in the capture, slot {g0.PitchX:0.0}x{g0.PitchY:0.0} px, contrast {g0.Score:0.00}");
+                }
+                if (!FarmCheck.InventoryOpen(img, grid.Value)) { invOpenSince = DateTime.MinValue; Debug("inventory closed", "closed"); return; }
                 if (invOpenSince == DateTime.MinValue) invOpenSince = now;
                 if ((now - invOpenSince).TotalSeconds < 0.5 || (now - lastInvRead).TotalSeconds < 1) return;   // open for 0.5 s, read once a second
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
-                if (coreTab != null && FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value)) > FarmCheck.TabMatchMax) return;
+                double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
+                if (tabDist > FarmCheck.TabMatchMax) { Debug($"skipped: another inventory tab is open (tab strip differs {tabDist:0.0}, limit {FarmCheck.TabMatchMax})", "othertab"); return; }
                 var (g, slots) = FarmCheck.BestRead(img, grid.Value, icons, Digits);
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int expectedFound = baseline != null ? baseline.Count(kv => kv.Value > 0) : Math.Min(5, icons.Count / 2);
-                if (found == 0 || found * 2 < expectedFound) return;             // too few cores: not the core tab
-                if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); }   // first good read: remember this tab
+                SaveAnnotated(bmp, g, slots, top);
+                if (found == 0 || found * 2 < expectedFound) { Debug($"skipped: only {found} core types recognised (need {Math.Max(1, (expectedFound + 1) / 2)}) - wrong tab or icons need re-learning", "few:" + found); return; }
+                if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
+                Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col}={(x.Count?.ToString() ?? "?")} (icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.Count)));
                 grid = g; lastInvImg = img; lastSlots = slots;
                 var counts = new Dictionary<string, int>();
                 foreach (var sl in slots) if (sl.Count.HasValue) counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
@@ -265,7 +307,7 @@ namespace CAHelper
                             {
                                 var p = FarmCheck.ParseLoot(l);
                                 if (p != null && rareWords.Any(w => p.Value.item.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0))
-                                    rare[p.Value.item] = (rare.TryGetValue(p.Value.item, out int n) ? n : 0) + p.Value.qty;
+                                { rare[p.Value.item] = (rare.TryGetValue(p.Value.item, out int n) ? n : 0) + p.Value.qty; Debug($"rare drop: {p.Value.item} x{p.Value.qty}"); }
                             }
                         lastLoot = lines;
                     }
@@ -281,6 +323,7 @@ namespace CAHelper
             var missing = FarmCheck.MissingToConfirm(icons.Select(i => i.name), counts, baseline, confirmedEmpty);
             if (missing.Count > 0)
             {
+                Debug("asking about missing cores: " + string.Join(", ", missing));
                 bool start = baseline == null;
                 pending = (missing, counts, start);
                 confirmText.Text = start
@@ -310,20 +353,69 @@ namespace CAHelper
             Render();
         }
 
+        static string Short(string n) => n.Replace("Upgrade Core", "UC").Replace("Force Core", "FC").Replace("(", "").Replace(")", "");
+
+        /// Saves the capture with the found grid and each slot's result drawn on it (Diagnostics > picture).
+        void SaveAnnotated(Bitmap src, Grid g, List<SlotRead> slots, int top)
+        {
+            try
+            {
+                using (var bmp = new Bitmap(src))
+                using (var gr = Graphics.FromImage(bmp))
+                using (var pen = new Pen(Color.Lime, 1))
+                using (var f = new Font("Segoe UI", 8f, FontStyle.Bold))
+                {
+                    double sx = g.X - FarmCheck.SlotInset * g.Scale;   // grid lines at the slot borders
+                    for (int k = 0; k <= 8; k++)
+                    {
+                        float x = (float)(g.X + k * g.PitchX), y = (float)(g.Y + k * g.PitchY);
+                        gr.DrawLine(pen, x, (float)g.Y, x, (float)(g.Y + 8 * g.PitchY));
+                        gr.DrawLine(pen, (float)g.X, y, (float)(g.X + 8 * g.PitchX), y);
+                    }
+                    foreach (var sl in slots)
+                    {
+                        float x = (float)(g.X + sl.Col * g.PitchX + 2), y = (float)(g.Y + sl.Row * g.PitchY + 2);
+                        string t = Short(sl.Item) + "\n" + (sl.Count?.ToString() ?? "?");
+                        gr.FillRectangle(new SolidBrush(Color.FromArgb(170, 0, 0, 0)), x, y, (float)g.PitchX - 4, 26);
+                        gr.DrawString(t, f, sl.Count.HasValue ? Brushes.Yellow : Brushes.Red, x, y);
+                    }
+                    bmp.Save(InvShotPath, System.Drawing.Imaging.ImageFormat.Png);
+                }
+            }
+            catch { }
+        }
+
         // ---------- learning ----------
         void LearnIcons()
         {
             using (var bmp = PartyOcr.Capture(InvCapture))
             {
                 var img = PartyOcr.ToImg(bmp);
-                var g = FarmCheck.FindGrid(img, 0, img.H - invArea.Height, img.W, invArea.Height);
-                if (!FarmCheck.InventoryOpen(img, g)) { MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return; }
+                var g = FarmCheck.FindGrid(img, 0, img.H - invArea.Height, img.W, invArea.Height, 8, 8, ExpectedPitch);
+                if (!FarmCheck.InventoryOpen(img, g)) { Debug($"learn icons: inventory not found (grid contrast {g.Score:0.00})"); MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return; }
                 g = FarmCheck.BestRead(img, g, icons, Digits).grid;
                 // same layout as taught: top row Upgrade Cores highest -> lowest, bottom row Force Cores
                 var learned = new List<(string, double[])>();
-                for (int i = 0; i < FarmCheck.Icons.Length; i++) learned.Add((FarmCheck.Icons[i].name, FarmCheck.IconFeature(img, g, i / 5, i % 5)));
+                var emptySlots = new List<string>();
+                for (int i = 0; i < FarmCheck.Icons.Length; i++)
+                {
+                    var f = FarmCheck.IconFeature(img, g, i / 5, i % 5);
+                    if (FarmCheck.Dist(f, FarmCheck.EmptySlot) < 1.0) emptySlots.Add(FarmCheck.Icons[i].name); else learned.Add((FarmCheck.Icons[i].name, f));
+                }
+                // Check the new icons before keeping them: every learned core must be found again, in its own slot.
+                var verify = FarmCheck.ReadInventory(img, g, learned, Digits);
+                bool ok = learned.Count >= 5 && learned.All(l => verify.Any(v => v.Item == l.Item1));
+                SaveAnnotated(bmp, g, verify, img.H - invArea.Height);
+                Debug($"learn icons: {learned.Count} learned, empty slots: {(emptySlots.Count == 0 ? "none" : string.Join(", ", emptySlots))}, verify {(ok ? "OK" : "FAILED")}");
+                if (!ok)
+                {
+                    MessageBox.Show("Learning didn't check out, so the old icons were kept.\n\nMake sure the core tab is open with the cores in the first two rows (top: Upgrade Core Ultimate to Low, bottom: Force Core Ultimate to Low) and the mouse away from the inventory.\n\nDiagnostics > last inventory read shows what was seen.", "Farm Tracker");
+                    return;
+                }
+                // keep defaults for cores whose slot was empty, so they're still recognised later
+                foreach (var name in emptySlots) { var d = icons.FirstOrDefault(x => x.name == name); if (d.f != null) learned.Add((name, d.f)); }
                 icons = learned; grid = g; coreTab = FarmCheck.TabPrint(img, g); SaveConfig();
-                MessageBox.Show("Learned 10 core icons from the first two rows (top: Upgrade Core Ultimate to Low, bottom: Force Core Ultimate to Low).", "Farm Tracker");
+                MessageBox.Show($"Learned {learned.Count - emptySlots.Count} core icons and remembered this tab as the core tab." + (emptySlots.Count > 0 ? "\nEmpty slots (kept the defaults): " + string.Join(", ", emptySlots) : ""), "Farm Tracker");
             }
         }
 

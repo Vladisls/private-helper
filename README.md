@@ -86,7 +86,7 @@ DAILY TO-DO
 - Hover a task to see why you do it, the CP it needs and its value.
 - Click + or - on a row. Right-click a task name to set it straight to done (or back to 0).
 - Finished rows move into "Done (n)" at the bottom; click it to fold/unfold.
-- "List > Edit list in Notepad" to change tasks. One task per line:
+- "List > Edit list in text editor" to change tasks. One task per line:
       name ; how many ; daily, action or weekly ; min CP ; value ; why
       Awakened IC1 ; 30 ; daily ; 550k ; 214 ; 7 DP per run
   Save and the panel updates by itself. Some minimum CPs are estimates (marked "est."
@@ -127,8 +127,12 @@ FARM TRACKER
   Everything is written to cabal-helper-farm-log.csv next to the exe.
 - A count shown as unreadable (e.g. a 7, which wasn't in the sample screenshot):
   Areas & learning > Fix counts, type the real number once and the digit is learned.
-- After moving the inventory or changing resolution: set the inventory area again and
-  "Learn core icons from the open inventory".
+- After moving the inventory or changing resolution: set the inventory area again (a box around
+  the whole inventory window is fine) and "Learn core icons from the open inventory". Learning
+  checks itself and keeps the old icons if it doesn't work.
+- Something off? Areas & learning > Diagnostics shows what the tracker decided (text log) and
+  the last inventory read as a picture with the grid and each slot's result drawn on it.
+  "Reset areas and everything learned" starts over.
 - While a session runs it checks three small screen areas twice a second; reading text
   only happens when something changed, so the CPU cost is tiny. It never touches the game.
 - Loot-feed counting is best effort: identical lines in a row can't be told apart and a big

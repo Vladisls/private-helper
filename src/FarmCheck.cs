@@ -78,30 +78,111 @@ namespace CAHelper
         public static readonly double[] EmptySlot = { 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 100.00, 0.00, 0.00 };
 
         // ---------- inventory grid ----------
-        /// Snaps a rough user box to the slot grid: border lines are brighter than slot interiors.
-        public static Grid FindGrid(Img img, int bx, int by, int bw, int bh, int cols = 8, int rows = 8)
+        /// Finds the 8x8 slot grid inside a box (the box may be loose, even the whole inventory window).
+        /// Builds a brightness profile along each axis once, then searches every slot size and start for the
+        /// pattern "bright border line, darker slot interior" repeated for all slots.
+        public static Grid FindGrid(Img img, int bx, int by, int bw, int bh, int cols = 8, int rows = 8, double expectedPitch = RefPitch)
         {
-            (int off, double pitch, double score) Axis(bool horiz)
+            // Look a little past the box so a tight or slightly clipped box still finds the whole grid.
+            int pad = (int)Math.Round(expectedPitch * 0.6);
+            int x0 = Math.Max(0, bx - pad), y0 = Math.Max(0, by - pad);
+            int x1 = Math.Min(img.W, bx + bw + pad), y1 = Math.Min(img.H, by + bh + pad);
+            int w = x1 - x0, h = y1 - y0;
+
+            (double start, double pitch, double score) Axis(double[] prof, int n)
             {
-                int n = horiz ? cols : rows; double best = -1; int bo = 0; double bp = RefPitch;
-                double guess = (horiz ? bw : bh) / (double)n;
-                for (double p = guess * 0.93; p <= guess * 1.07; p += 0.25)
-                    for (int o = -14; o <= 14; o++)
+                double best = double.MinValue, bs = 0, bp = expectedPitch;
+                for (double p = expectedPitch * 0.8; p <= expectedPitch * 1.25; p += 0.25)
+                {
+                    int inset = Math.Max(2, (int)Math.Round(6 * p / RefPitch));
+                    for (double st = 0; st + n * p < prof.Length - 1 - inset; st += 1)
                     {
-                        double s = 0;
+                        double sc = 0;
                         for (int k = 0; k <= n; k++)
                         {
-                            int pos = (horiz ? bx : by) + o + (int)Math.Round(k * p);
-                            for (int t = 0; t < (horiz ? bh : bw); t += 3) s += horiz ? img.Lum(pos, by + t) : img.Lum(bx + t, pos);
+                            int pos = (int)Math.Round(st + k * p);
+                            sc += prof[pos];
+                            if (k < n) sc -= prof[pos + inset];
                         }
-                        if (s > best) { best = s; bo = o; bp = p; }
+                        if (sc > best) { best = sc; bs = st; bp = p; }
                     }
-                return (bo, bp, best);
+                }
+                return (bs, bp, best);
             }
-            var h = Axis(true); var v = Axis(false);
-            var g = new Grid { X = bx + h.off, Y = by + v.off, PitchX = h.pitch, PitchY = v.pitch };
-            g.Score = BorderContrast(img, g, cols, rows);
-            return g;
+
+            // 1) columns, from the whole (padded) box
+            var colProf = new double[w];
+            for (int y = 0; y < h; y += 2) for (int x = 0; x < w; x++) colProf[x] += img.Lum(x0 + x, y0 + y);
+            var hc = Axis(colProf, cols);
+            // 2) rows, only across the grid's own columns (so the buttons under the grid can't pass as a row)
+            int gx0 = x0 + (int)hc.start, gx1 = Math.Min(img.W, gx0 + (int)Math.Round(cols * hc.pitch));
+            var rowProf = new double[h];
+            for (int y = 0; y < h; y++) for (int x = gx0; x < gx1; x += 2) rowProf[y] += img.Lum(x, y0 + y);
+            var vr = Axis(rowProf, rows);
+            // 3) columns again, only across the grid's rows
+            int gy0 = y0 + (int)vr.start, gy1 = Math.Min(img.H, gy0 + (int)Math.Round(rows * vr.pitch));
+            Array.Clear(colProf, 0, colProf.Length);
+            for (int y = gy0; y < gy1; y += 2) for (int x = 0; x < w; x++) colProf[x] += img.Lum(x0 + x, y);
+            hc = Axis(colProf, cols);
+
+            var g = new Grid { X = x0 + hc.start, Y = y0 + vr.start, PitchX = hc.pitch, PitchY = vr.pitch };
+            // A neighbouring window edge can mimic one column/row of slots: also try one slot left/right/up/down
+            // and keep the position with the strongest border-vs-interior contrast.
+            // Every real column has horizontal slot borders running through it (and every row vertical ones);
+            // a gap next to the window doesn't. Keep the position whose weakest column/row is strongest.
+            Grid best = g; double bestWeak = WeakestLine(img, g, cols, rows);
+            foreach (var (dx, dy) in new[] { (-1, 0), (1, 0), (0, -1), (0, 1) })
+            {
+                var c = g; c.X += dx * g.PitchX; c.Y += dy * g.PitchY;
+                if (c.X < 0 || c.Y < 0 || c.X + cols * c.PitchX >= img.W || c.Y + rows * c.PitchY >= img.H) continue;
+                double weak = WeakestLine(img, c, cols, rows);
+                if (weak > bestWeak) { best = c; bestWeak = weak; }
+            }
+            best.Score = BorderContrast(img, best, cols, rows);
+            return best;
+        }
+
+        /// Border contrast of the weakest column (its horizontal borders) or row (its vertical borders).
+        public static double WeakestLine(Img img, Grid g, int cols = 8, int rows = 8)
+        {
+            int inset = Math.Max(2, (int)Math.Round(6 * g.Scale));
+            double weakest = double.MaxValue;
+            for (int c = 0; c < cols; c++)
+            {
+                double s = 0; int n = 0;
+                for (int k = 0; k <= rows; k++)
+                {
+                    int y = (int)Math.Round(g.Y + k * g.PitchY);
+                    for (double f = 0.25; f <= 0.75; f += 0.05) { int x = (int)(g.X + (c + f) * g.PitchX); s += img.Lum(x, y) - img.Lum(x, y + (k < rows ? inset : -inset)); n++; }
+                }
+                weakest = Math.Min(weakest, s / n);
+            }
+            for (int r = 0; r < rows; r++)
+            {
+                double s = 0; int n = 0;
+                for (int k = 0; k <= cols; k++)
+                {
+                    int x = (int)Math.Round(g.X + k * g.PitchX);
+                    for (double f = 0.25; f <= 0.75; f += 0.05) { int y = (int)(g.Y + (r + f) * g.PitchY); s += img.Lum(x, y) - img.Lum(x + (k < cols ? inset : -inset), y); n++; }
+                }
+                weakest = Math.Min(weakest, s / n);
+            }
+            return weakest;
+        }
+
+        /// Slots whose centre is near-black, i.e. empty inventory slots.
+        public static int DarkSlots(Img img, Grid g, int cols = 8, int rows = 8)
+        {
+            int n = 0;
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                {
+                    double sum = 0; int k = 0;
+                    for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++)
+                    { sum += img.Lum((int)(g.X + c * g.PitchX + g.PitchX * (0.3 + 0.1 * i)), (int)(g.Y + r * g.PitchY + g.PitchY * (0.3 + 0.1 * j))); k++; }
+                    if (sum / k < 45) n++;
+                }
+            return n;
         }
 
         /// Brightness on border lines vs just inside the slots. Inventory open ~2.2, anything else ~1.3.
