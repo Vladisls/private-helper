@@ -649,6 +649,25 @@ static class T {
         Check(refused && Updater.ReadLocalOcrSha(ocrDir) == goodSha, "a mismatching OCR package is never extracted");
       } finally { try { System.IO.Directory.Delete(tmpDir, true); } catch { } }
     }
+    {
+      // Debug overlay: a fresh icon read (Count null) keeps the last reader answer as Pending instead of flashing red
+      var known = new Dictionary<(int r, int c, string item), int?>();
+      var done = new List<SlotRead> { new SlotRead { Row = 0, Col = 0, Item = "A", Count = 12 }, new SlotRead { Row = 0, Col = 1, Item = "B", Count = null } };
+      FarmCheck.RecordCounts(done, known);
+      var m0 = FarmCheck.MergeCountsForDisplay(done, known);
+      Check(known[(0,0,"A")] == 12 && known.ContainsKey((0,1,"B")) && known[(0,1,"B")] == null
+            && m0[0].State == SlotCountState.Read && m0[0].Count == 12 && m0[1].State == SlotCountState.Failed, "overlay: reader answer = Read (map updated), reader \"not read\" = Failed");
+      var fresh = new List<SlotRead> { new SlotRead { Row = 0, Col = 0, Item = "A" }, new SlotRead { Row = 0, Col = 1, Item = "B" }, new SlotRead { Row = 1, Col = 0, Item = "C" } };
+      var m1 = FarmCheck.MergeCountsForDisplay(fresh, known);
+      Check(m1[0].State == SlotCountState.Pending && m1[0].Count == 12 && m1[1].State == SlotCountState.Failed
+            && m1[2].State == SlotCountState.Pending && m1[2].Count == null, "overlay: fresh read keeps the known count as Pending, a failed slot stays Failed, a new slot waits");
+      var moved = new List<SlotRead> { new SlotRead { Row = 0, Col = 0, Item = "D" } };
+      FarmCheck.ForgetMissingCounts(moved, known);
+      var m2 = FarmCheck.MergeCountsForDisplay(moved, known);
+      Check(known.Count == 0 && m2[0].State == SlotCountState.Pending && m2[0].Count == null, "overlay: a slot that empties or changes item forgets its last count");
+      moved[0].Count = 3; FarmCheck.RecordCounts(moved, known);
+      Check(known.Count == 1 && known[(0,0,"D")] == 3 && FarmCheck.MergeCountsForDisplay(moved, known)[0].State == SlotCountState.Read, "overlay: the next reader answer is Read and remembered");
+    }
     Check(new Version(2,1,0) > new Version(2,0,9) && !(new Version(2,1,0) > new Version(2,1,0)), "only newer versions update");
     Check(Updater.Short(new Version(2,1,3,0))=="2.1.3", "version shown as 2.1.3");
     Console.WriteLine(fail==0?"ALL PASS":fail+" FAILED"); return fail;

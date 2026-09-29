@@ -74,6 +74,8 @@ namespace CAHelper
         Grid? grid; Grid? readGrid;
         string lastAnchorInfo, ovAnchor = ""; bool ovAnchorOk; FarmCheck.AnchorResult ovAnchorRes; Rectangle ovAnchorCap;
         readonly Dictionary<(int r, int c), string> slotIdentity = new Dictionary<(int, int), string>();   // sticky icon identities per slot
+        // the reader's last answer per slot (null = "not read"), so the overlay keeps it while a fresh icon read waits for counts
+        readonly Dictionary<(int r, int c, string item), int?> lastKnownCounts = new Dictionary<(int, int, string), int?>();
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
         bool busyEnd, busyLoot, busyInv, busyProbeOcr; int stripSaves;
@@ -176,6 +178,7 @@ namespace CAHelper
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
             icons = FarmCheck.DefaultIcons(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
+            slotIdentity.Clear(); lastKnownCounts.Clear();
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
             Debug("RESET: areas back to defaults, learned icons/core tab forgotten");
             Render();
@@ -185,7 +188,7 @@ namespace CAHelper
         {
             var r = AreaPicker.Pick(msg);
             if (r == null) return;
-            area = r.Value; if (resetGrid) { grid = null; coreTab = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty; }
+            area = r.Value; if (resetGrid) { grid = null; coreTab = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty; lastKnownCounts.Clear(); }
             Debug($"area set: {r.Value.X},{r.Value.Y} {r.Value.Width}x{r.Value.Height}");
             SaveConfig(); Render();
         }
@@ -195,7 +198,7 @@ namespace CAHelper
         {
             Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
             running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
-            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear(); slotIdentity.Clear();
+            confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear(); slotIdentity.Clear(); lastKnownCounts.Clear();
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
             Render();
@@ -440,11 +443,14 @@ namespace CAHelper
                     overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(x, gy + (int)g.Y), B = new Point(x, gy + (int)Math.Round(g.Y + 8 * g.PitchY)), C = Color.Lime });
                     overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(gx + (int)g.X, y), B = new Point(gx + (int)Math.Round(g.X + 8 * g.PitchX), y), C = Color.Lime });
                 }
-                foreach (var sl in ovSlots)
+                foreach (var t in FarmCheck.MergeCountsForDisplay(ovSlots, lastKnownCounts))
                 {
-                    string shown = sl.Count?.ToString() ?? "?";                     // the text reader's count; "?" until read
+                    // Read: yellow; Pending (waiting for the reader): last known count in dim yellow with "…"; Failed: red "?"
+                    var sl = t.Slot;
+                    string shown = t.State == SlotCountState.Pending ? (t.Count?.ToString() ?? "") + "…" : t.Count?.ToString() ?? "?";
+                    var col = t.State == SlotCountState.Read ? Color.Yellow : t.State == SlotCountState.Pending ? Color.FromArgb(190, 180, 90) : Color.Red;
                     overlay.Tags.Add(new DebugOverlay.Note { P = new Point(gx + (int)(g.X + sl.Col * g.PitchX) + 2, gy + (int)(g.Y + sl.Row * g.PitchY) + 2),
-                        Text = Short(sl.Item) + " " + shown + $" ·{sl.IconDist:0.0}", C = sl.Count.HasValue ? Color.Yellow : Color.Red });
+                        Text = Short(sl.Item) + " " + shown + $" ·{sl.IconDist:0.0}", C = col });
                 }
                 if (ovTab != null)
                 {
@@ -482,6 +488,7 @@ namespace CAHelper
                             foreach (var sl in slots) slotIdentity[(sl.Row, sl.Col)] = sl.Item;
                             foreach (var k in slotIdentity.Keys.ToList()) if (!slots.Any(x => x.Row == k.r && x.Col == k.c)) slotIdentity.Remove(k);
                         }
+                        FarmCheck.ForgetMissingCounts(slots, lastKnownCounts);
                         ovGrid = g2; ovSlots = slots; ovInv = $"open, contrast {g.Score:0.00}, {slots.Select(x => x.Item).Distinct().Count()} core types";
                         // Preview counts too (no session): read them with the text reader in the background.
                         if (pres.Ok && !busyProbeOcr && slots.Count > 0)
@@ -497,7 +504,7 @@ namespace CAHelper
                                     var ocrP = await PartyOcr.ReadCountStripsAsync(stripsP, glyphsP, slotsP.Select(x => Short(x.Item)).ToList(), digitsP);
                                     LogCountEngine();
                                     for (int i = 0; i < slotsP.Count; i++) slotsP[i].Count = ocrP[i] ?? (glyphsP[i] == 0 ? 1 : (int?)null);
-                                    if (!running) { ovSlots = slotsP; DrawOverlay(); }
+                                    if (!running) { FarmCheck.RecordCounts(slotsP, lastKnownCounts); ovSlots = slotsP; DrawOverlay(); }
                                 }
                                 catch (Exception ex) { Debug("preview count read failed: " + ex.Message, "previewocr"); }
                                 finally { copyP.Dispose(); busyProbeOcr = false; }
@@ -575,7 +582,7 @@ namespace CAHelper
                 var g = found.Value; int m = (int)Math.Round(g.PitchX * 0.2);
                 invArea = new Rectangle(screen.X + (int)g.X - m, screen.Y + (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
                 foundPitch = g.PitchX; locatedBy = how; ovTitle = titleRect;
-                grid = null; lastInvRead = DateTime.MinValue; SaveConfig();
+                grid = null; lastInvRead = DateTime.MinValue; lastKnownCounts.Clear(); SaveConfig();
                 Debug($"found the inventory by {how}: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}, slot {g.PitchX:0.0} px ({titleInfo})");
                 return true;
             }
@@ -639,6 +646,7 @@ namespace CAHelper
                     foreach (var sl in slots) slotIdentity[(sl.Row, sl.Col)] = sl.Item;
                     foreach (var k in slotIdentity.Keys.ToList()) if (!slots.Any(x => x.Row == k.r && x.Col == k.c)) slotIdentity.Remove(k);   // now empty / unknown
                 }
+                FarmCheck.ForgetMissingCounts(slots, lastKnownCounts);                  // empty / other item: its last count no longer applies
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
                 ovInvCap = InvCapture; ovGrid = g; ovInv = $"open, {found} core types";
@@ -667,7 +675,7 @@ namespace CAHelper
                     {
                         // Nothing recognised: the grid may be the wrong one (e.g. a lookalike pattern). Search again next time,
                         // and look for the inventory's title on screen while waiting for counts.
-                        grid = null; readGrid = null;
+                        grid = null; readGrid = null; lastKnownCounts.Clear();
                         if (baseline == null || finishing) TryLocateInventory(now);
                     }
                     return;
@@ -737,6 +745,7 @@ namespace CAHelper
                         if (unread.Count > 0) Warn("Some counts unreadable by the text reader: see Areas & learning > Diagnostics: last count strip");
                         smoother.Add(counts, confident); readsSinceStart++;
                         ApplyRead(smoother.Stable(), smoother.Gone());
+                        FarmCheck.RecordCounts(slotsNow, lastKnownCounts);
                         ovSlots = slotsNow; Render(); DrawOverlay();
                     }
                     finally { busyInv = false; frameNow.Dispose(); }

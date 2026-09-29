@@ -26,12 +26,45 @@ namespace CAHelper
     /// GlyphCount = digit-sized glyphs found in the slot's count band (0 = no count drawn).
     public sealed class SlotRead { public int Row, Col; public string Item; public double IconDist; public int? Count; public int GlyphCount; }
 
+    /// How the Debug overlay shows a slot's count: Read = the latest reader answer has it; Pending = a fresh icon read
+    /// waiting for the reader (Count = the last known one, null if none yet); Failed = the reader answered "not read".
+    public enum SlotCountState { Read, Pending, Failed }
+    public sealed class SlotShown { public SlotRead Slot; public int? Count; public SlotCountState State; }
+
     /// Pixel logic for the Farm Tracker: inventory grid, core icons, stack digits, end-window trigger, loot-feed diff.
     /// Numbers were tuned on real 2560x1440 screenshots; other resolutions scale by the detected slot size.
     public static class FarmCheck
     {
         public const double RefPitch = 76.75;
         public const int SlotInset = 8;
+
+        /// Drops remembered counts whose slot is now empty/unknown or holds another item (key: row, col, item).
+        public static void ForgetMissingCounts(IList<SlotRead> slots, Dictionary<(int r, int c, string item), int?> lastKnown)
+        {
+            var keep = new HashSet<(int, int, string)>(slots.Select(x => (x.Row, x.Col, x.Item)));
+            foreach (var k in lastKnown.Keys.ToList()) if (!keep.Contains(k)) lastKnown.Remove(k);
+        }
+
+        /// A reader result arrived for these slots: remember each answer (null = "not read"), forget the rest.
+        public static void RecordCounts(IList<SlotRead> slots, Dictionary<(int r, int c, string item), int?> lastKnown)
+        {
+            ForgetMissingCounts(slots, lastKnown);
+            foreach (var x in slots) lastKnown[(x.Row, x.Col, x.Item)] = x.Count;
+        }
+
+        /// What to draw per slot: a count on the slot itself is the reader's answer (Read); a slot without one is
+        /// Failed if the reader's last answer for it was "not read", else Pending with the last known count (if any).
+        public static List<SlotShown> MergeCountsForDisplay(IList<SlotRead> fresh, IReadOnlyDictionary<(int r, int c, string item), int?> lastKnown)
+        {
+            var list = new List<SlotShown>();
+            foreach (var x in fresh)
+            {
+                if (x.Count.HasValue) { list.Add(new SlotShown { Slot = x, Count = x.Count, State = SlotCountState.Read }); continue; }
+                bool known = lastKnown.TryGetValue((x.Row, x.Col, x.Item), out int? v);
+                list.Add(new SlotShown { Slot = x, Count = known ? v : null, State = known && !v.HasValue ? SlotCountState.Failed : SlotCountState.Pending });
+            }
+            return list;
+        }
 
         // core icon colour histograms from the same screenshot (top row Upgrade Cores, bottom row Force Cores)
         public static readonly (string name, double[] f)[] Icons = {
