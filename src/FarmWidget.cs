@@ -307,7 +307,10 @@ namespace CAHelper
                     viewSaves = (viewSaves + 1) % 5;
                     string path = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}.png");
                     bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-                    Debug("view saved as " + Path.GetFileName(path));
+                    // also what the text reader last received for the counts, with its words and results
+                    string digitsPath = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}-digits.png");
+                    PartyOcr.SaveLastStrip(digitsPath);
+                    Debug("view saved as " + Path.GetFileName(path) + (File.Exists(digitsPath) ? " + " + Path.GetFileName(digitsPath) : ""));
                     Files.OpenFolder(path);
                 }
                 if (!hadOverlay) { overlay.Close(); overlay.Dispose(); overlay = null; }
@@ -407,7 +410,7 @@ namespace CAHelper
                                 {
                                     var imgP = PartyOcr.ToImg(copyP); var stripsP = new List<Img>(); var glyphsP = new List<int>();
                                     foreach (var sl in slotsP) { stripsP.Add(FarmCheck.CountRegionImage(imgP, gridP, sl.Row, sl.Col, out int n)); glyphsP.Add(n); }
-                                    var ocrP = await PartyOcr.ReadCountStripsAsync(stripsP, glyphsP);
+                                    var ocrP = await PartyOcr.ReadCountStripsAsync(stripsP, glyphsP, slotsP.Select(x => Short(x.Item)).ToList());
                                     for (int i = 0; i < slotsP.Count; i++) slotsP[i].Count = ocrP[i] ?? (glyphsP[i] == 0 ? 1 : (int?)null);
                                     if (!running) { ovSlots = slotsP; DrawOverlay(); }
                                 }
@@ -604,7 +607,7 @@ namespace CAHelper
                         // position only, no font shapes) go to the text reader; the count is the trailing run of digits.
                         var imgNow = PartyOcr.ToImg(copy); var strips = new List<Img>(); var glyphCounts = new List<int>();
                         foreach (var sl in slotsNow) { strips.Add(FarmCheck.CountRegionImage(imgNow, gridNow, sl.Row, sl.Col, out int n)); glyphCounts.Add(n); }
-                        ocr = await PartyOcr.ReadCountStripsAsync(strips, glyphCounts);
+                        ocr = await PartyOcr.ReadCountStripsAsync(strips, glyphCounts, slotsNow.Select(x => Short(x.Item)).ToList());
                     }
                     catch (Exception ex) { Debug("text reader failed on the counts: " + ex.Message, "ocrfail"); }
                     finally { copy.Dispose(); }
