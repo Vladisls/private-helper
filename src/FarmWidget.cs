@@ -396,7 +396,7 @@ namespace CAHelper
             {
                 var region = FarmCheck.CountRegionImage(img, g2, sl.Row, sl.Col, out int n, out Img digits);
                 bool none = region == null || region.W <= 0 || region.H <= 0;
-                list.Add(($"{Short(sl.Item)} ({n} glyphs)", none ? null : region, none ? null : digits, n));
+                list.Add(($"{Short(sl.Item)} ({n} digits)", none ? null : region, none ? null : digits, n));
             }
             why = null;
             return list;
@@ -690,7 +690,7 @@ namespace CAHelper
                     {
                         // Generic count reading: the raw pixels of each slot's count region (found by glyph size and
                         // position only, no font shapes) go to the text reader; the count is the trailing run of digits.
-                        // Tesseract (OCR package) reads the digits-isolated picture first, then the raw one; without the
+                        // Tesseract (OCR package) reads the digits-isolated picture, the raw one only if that gives nothing; without the
                         // package, Windows' text reader reads the raw region in its treatments.
                         var imgNow = PartyOcr.ToImg(copy); var strips = new List<Img>(); var glyphCounts = new List<int>(); var digits = new List<Img>();
                         foreach (var sl in slotsNow) { strips.Add(FarmCheck.CountRegionImage(imgNow, gridNow, sl.Row, sl.Col, out int n, out Img dg)); glyphCounts.Add(n); digits.Add(dg); }
@@ -702,7 +702,7 @@ namespace CAHelper
                     try
                     {
                         var byReader = new HashSet<SlotRead>();
-                        var sure = PartyOcr.LastCountConfident();                         // false: Tesseract's A and B disagreed
+                        var sure = PartyOcr.LastCountConfident();                         // false: only the raw picture read it, or B doesn't match its digits
                         var unsure = new HashSet<SlotRead>();
                         for (int i = 0; i < slotsNow.Count; i++)
                         {
@@ -712,7 +712,6 @@ namespace CAHelper
                         }
                         var unread = slotsNow.Where(x => !x.Count.HasValue).Select(x => Short(x.Item)).ToList();
                         if (ocr != null) Debug($"counts by text reader: {byReader.Count}/{slotsNow.Count} read ({PartyOcr.LastCountSourceSummary()})" + (unread.Count > 0 ? "; unreadable: " + string.Join(", ", unread) : ""), "ocr:" + byReader.Count + string.Join("", unread));
-                        foreach (var dis in PartyOcr.LastCountDisagreements()) Debug("tesseract disagree (not confident): " + dis, "dis:" + dis);
                         // Keep the strips of reads where a count changed since the last read (last 5).
                         bool changed = false;
                         foreach (var sl in slotsNow)

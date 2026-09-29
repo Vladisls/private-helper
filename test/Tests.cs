@@ -419,31 +419,70 @@ static class T {
         Console.WriteLine("VARIANTS: " + string.Join(" | ", infoV));
         Check(regionsSeen == 20 && okV == regionsSeen, $"5 OCR treatments per real count region: non-empty, larger than the region, white-isolated 0-30% black ({okV}/{regionsSeen})");
       }
-      // Tesseract input B: only the count's glyph-chain pixels, black on white, 3x, white margin
+      // Tesseract input B: exactly the count's digits and nothing else, black on white, 3x, white margin. On every
+      // count region of the three captures (first two rows, 5 cores each) the picture must hold one black component
+      // per digit of the known count, and CountRegionImage must report that many digits.
       {
-        int seenD = 0, okD = 0; var infoD = new List<string>();
-        foreach (var (nmD, imD, boxD) in new[]{ ("inv", inv, (1912,248,612,612)), ("mis", Load(fmis), (815,160,620,620)) }) {
-          var grD = FarmCheck.BestRead(imD, FarmCheck.FindGrid(imD, boxD.Item1, boxD.Item2, boxD.Item3, boxD.Item4), FarmCheck.DefaultIcons());
-          foreach (var sl in grD.slots.OrderBy(x => x.Row * 8 + x.Col)) {
-            var reg = FarmCheck.CountRegionImage(imD, grD.grid, sl.Row, sl.Col, out int nG, out Img mask);
-            if (reg == null) continue;
+        int seenD = 0, okD = 0; var infoD = new List<string>(); var badD = new List<string>();
+        var capsD = new List<(string nm, Img im, Grid g, string counts)>();
+        { var gI = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons()).grid; capsD.Add(("inv", inv, gI, "3,208,144,14,9,5,34,158,16,2")); }
+        { var mD = Load(fmis); var gM = FarmCheck.BestRead(mD, FarmCheck.FindGrid(mD, 815, 160, 620, 620), FarmCheck.DefaultIcons()).grid; capsD.Add(("mis", mD, gM, "3,223,172,14,9,5,34,158,16,2")); }
+        var fqD = System.IO.Path.Combine(dataDir, "q.bin");
+        if (System.IO.File.Exists(fqD)) { var qD = Load(fqD); var gQ = FarmCheck.LocateByButton(qD, 1.0, out double _); if (gQ.HasValue) capsD.Add(("q", qD, gQ.Value, "3,262,209,14,9,5,34,158,16,2")); }
+        foreach (var (nmD, imD, gD, countsD) in capsD) {
+          var cnt = countsD.Split(',');
+          for (int k = 0; k < 10; k++) {
+            int rD = k / 5, cD = k % 5;
+            var reg = FarmCheck.CountRegionImage(imD, gD, rD, cD, out int nD, out Img mask);
             seenD++;
+            if (reg == null) { badD.Add($"{nmD} {rD},{cD}: no region"); continue; }
             var pic = FarmCheck.DigitsIsolatedPicture(mask);
             int black = 0; bool binary = true;
-            for (int q = 0; q < pic.W * pic.H; q++) { int v = pic.Px[q*4]; if (v == 0) black++; else if (v != 255) binary = false; }
-            double frac = pic.W * pic.H > 0 ? (double)black / (pic.W * pic.H) : 0;
-            var (comps, glyphsX) = BlackComponents(pic);
-            // inv.bin is a clean capture: one 8-connected component per glyph. mis.bin has a dotted line drawn across
-            // the digits, which cuts strokes into pieces stacked above each other; counted as CountGlyphs counts glyphs
-            // (pieces overlapping in x are one glyph) they still match.
-            bool ok = pic.W == mask.W * 3 + 60 && pic.H == mask.H * 3 + 60 && mask.W == reg.W && mask.H == reg.H && binary && black > 0 && frac < 0.30
-                      && glyphsX == nG && (nmD != "inv" || comps == nG);
-            if (ok) okD++;
-            infoD.Add($"{nmD} {sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")} {pic.W}x{pic.H} black {frac:P0} comps {comps} glyphs {glyphsX}/{nG}");
+            for (int q2 = 0; q2 < pic.W * pic.H; q2++) { int v = pic.Px[q2*4]; if (v == 0) black++; else if (v != 255) binary = false; }
+            double frac = (double)black / (pic.W * pic.H);
+            var (comps, _) = BlackComponents(pic);
+            bool ok = pic.W == mask.W * 3 + 60 && pic.H == mask.H * 3 + 60 && mask.W == reg.W && mask.H == reg.H && binary && frac > 0 && frac < 0.30
+                      && comps == cnt[k].Length && nD == comps;
+            if (ok) okD++; else badD.Add($"{nmD} {rD},{cD} ({cnt[k]}): {comps} components, {nD} digits");
+            infoD.Add($"{nmD} {rD},{cD} {cnt[k]}: {comps}/{cnt[k].Length}");
           }
         }
-        Console.WriteLine("DIGITS-ISOLATED: " + string.Join(" | ", infoD));
-        Check(seenD == 20 && okD == seenD, $"digits-isolated picture per real count region: pure black/white, 0-30% black, one black component per chain glyph ({okD}/{seenD})");
+        Console.WriteLine("DIGITS-ISOLATED (slot count: components/digits): " + string.Join(" | ", infoD));
+        Check(capsD.Count == 3 && seenD == 30 && okD == seenD, $"digits picture B holds exactly the count's digits, one black component each, on inv, mis and q ({okD}/{seenD})" + (badD.Count > 0 ? ": " + string.Join("; ", badD) : ""));
+        // the same count regions with the leading digit touching something: a bright bar joining it to the next digit
+        // (a merged pair, split at the fixed advance), a solid white shine touching it, a dim tinted icon rim touching it
+        int seenS = 0, okS = 0; var badS = new List<string>();
+        foreach (var (nmD, imD, gD, countsD) in capsD) {
+          var cnt = countsD.Split(',');
+          for (int k = 0; k < 10; k++) {
+            if (cnt[k].Length < 2) continue;
+            var bandS = FarmCheck.CropImg(imD, FarmCheck.DigitBand(gD, k / 5, k % 5));
+            var chain = FarmCheck.CountGlyphs(bandS, gD.Scale); var region = FarmCheck.CountRegion(chain, bandS.W, bandS.H).Value;
+            FarmCheck.DigitsMask(bandS, chain, region, out var clean);
+            if (clean.Count < 2) { badS.Add($"{nmD} {k / 5},{k % 5}: clean picture has {clean.Count} digits"); continue; }
+            var d0 = clean[0]; var d1 = clean[1]; int hD = d0.Height, mid = d0.Y + hD / 2;
+            foreach (var kind in new[]{ "bridge", "shine", "rim" }) {
+              var b2 = new Img(bandS.W, bandS.H, (byte[])bandS.Px.Clone());
+              void Paint(int x0, int x1, int y0, int y1, int v, int sat) { for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) { int X = region.X + x, Y = region.Y + y; if (X < 0 || Y < 0 || X >= b2.W || Y >= b2.H) continue; int i = (Y * b2.W + X) * 4; b2.Px[i] = (byte)(v - sat); b2.Px[i+1] = (byte)(v - sat / 2); b2.Px[i+2] = (byte)v; } }
+              if (kind == "bridge") Paint(d0.Right - 1, d1.X, mid - 1, mid, 234, 0);
+              if (kind == "shine") Paint(d0.X - hD / 2, d0.X, mid - hD / 3, mid + hD / 3, 234, 0);
+              if (kind == "rim") Paint(d0.X - hD / 2, d0.X, d0.Y, d0.Bottom - 1, 200, 30);
+              var mk = FarmCheck.DigitsMask(b2, chain, region, out var got);
+              var (compsS, _) = BlackComponents(FarmCheck.DigitsIsolatedPicture(mk));
+              seenS++;
+              if (got.Count == cnt[k].Length && compsS == got.Count) okS++; else badS.Add($"{nmD} {k / 5},{k % 5} ({cnt[k]}) {kind}: {got.Count} digits, {compsS} components");
+            }
+          }
+        }
+        Check(seenS == 54 && okS == seenS, $"digits picture B with the leading digit joined to its neighbour, to a white shine or to an icon rim: still one component per digit ({okS}/{seenS})" + (badS.Count > 0 ? ": " + string.Join("; ", badS) : ""));
+        // the lone-digit picture for Tesseract: the digit three times, as black components, same height
+        { var g9 = capsD[0].g; FarmCheck.CountRegionImage(inv, g9, 0, 4, out int n9, out Img m9);
+          var rep = FarmCheck.RepeatedDigitPicture(m9); var one = FarmCheck.DigitsIsolatedPicture(m9);
+          var (c9, _) = BlackComponents(rep); int bl1 = 0, bl3 = 0;
+          for (int q2 = 0; q2 < one.W * one.H; q2++) if (one.Px[q2*4] == 0) bl1++;
+          for (int q2 = 0; q2 < rep.W * rep.H; q2++) if (rep.Px[q2*4] == 0) bl3++;
+          Check(n9 == 1 && c9 == 3 && bl3 == 3 * bl1 && FarmCheck.RepeatedDigitPicture(new Img(2, 2, Enumerable.Repeat((byte)255, 16).ToArray())) == null,
+                $"repeated lone digit picture: the 9 three times ({c9} components, {bl3} = 3 x {bl1} black pixels), nothing for an empty mask"); }
       }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
@@ -531,20 +570,34 @@ static class T {
           && FarmCheck.TesseractCount("209", 0.39f, true) == null && FarmCheck.TesseractCount("", 0.95f, true) == null && FarmCheck.TesseractCount("123456", 0.95f, true) == null && FarmCheck.TesseractCount(null, 1f, false) == null,
           "Tesseract result: trailing 1-5 digits, spaces dropped on the digits-only picture, under 40% confidence is not read");
     Check(FarmCheck.AcceptIsolatedCount("208", 3) && !FarmCheck.AcceptIsolatedCount("08", 2) && !FarmCheck.AcceptIsolatedCount("44", 3) && FarmCheck.AcceptIsolatedCount("0", 1) && FarmCheck.AcceptIsolatedCount("2 08", 3),
-          "digits-only read must match the glyph chain: same number of digits, no leading zero");
+          "digits-only read must match the digits picture: same number of digits, no leading zero");
     {
       var onlyA = FarmCheck.DecideTesseract("208", 0.9f, null, 0f, 2); var onlyA2 = FarmCheck.DecideTesseract("208", 0.9f, "08", 0.3f, 2);
       var onlyB = FarmCheck.DecideTesseract("", 0.1f, "14", 0.8f, 2); var onlyBOff = FarmCheck.DecideTesseract(null, 0f, "08", 0.8f, 2);
       var same = FarmCheck.DecideTesseract("144", 0.7f, "1 44", 0.9f, 3);
-      var longer = FarmCheck.DecideTesseract("208", 0.8f, "08", 0.9f, 2); var longer2 = FarmCheck.DecideTesseract("223", 0.6f, "23", 0.95f, 2);
-      var dis = FarmCheck.DecideTesseract("51", 0.7f, "34", 0.9f, 2); var disA = FarmCheck.DecideTesseract("34", 0.7f, "7", 0.9f, 2);
+      var longer = FarmCheck.DecideTesseract("208", 0.8f, "08", 0.9f, 2); var junkA = FarmCheck.DecideTesseract("201", 0.73f, "291", 0.96f, 3);
       var none = FarmCheck.DecideTesseract("", 0f, "9", 0.2f, 1);
-      Check(onlyA == (208, FarmCheck.TessA, true) && onlyA2 == (208, FarmCheck.TessA, true), $"A+B decision: only A reads (B missing or under 40%) -> A ({onlyA}, {onlyA2})");
-      Check(onlyB == (14, FarmCheck.TessB, true) && onlyBOff == (8, FarmCheck.TessB, false), $"A+B decision: only B reads -> B, not confident when it doesn't match the chain ({onlyB}, {onlyBOff})");
+      Check(onlyA == (208, FarmCheck.TessA, false) && onlyA2 == (208, FarmCheck.TessA, false), $"A+B decision: only A reads (B missing or under 40%) -> A, never confident ({onlyA}, {onlyA2})");
+      Check(onlyB == (14, FarmCheck.TessB, true) && onlyBOff == (8, FarmCheck.TessB, false), $"A+B decision: only B reads -> B, not confident when it doesn't match its digits ({onlyB}, {onlyBOff})");
       Check(same == (144, FarmCheck.TessAgree, true), $"A+B decision: equal -> agree ({same})");
-      Check(longer == (208, FarmCheck.TessALonger, true) && longer2 == (223, FarmCheck.TessALonger, true), $"A+B decision: A ends with B and is longer -> A ({longer}, {longer2})");
-      Check(dis == (34, FarmCheck.TessDisagree, false) && disA == (34, FarmCheck.TessDisagree, false), $"A+B decision: disagree -> B, or A when only A matches the chain; never confident ({dis}, {disA})");
+      Check(longer == (8, FarmCheck.TessBOverA, false) && junkA == (291, FarmCheck.TessBOverA, true), $"A+B decision: A never overrides B, not even when longer ({longer}, {junkA})");
       Check(none == (null, "none", false), $"A+B decision: nothing read ({none})");
+    }
+    {
+      Check(FarmCheck.TesseractBNeedsRetry("", 0f) && FarmCheck.TesseractBNeedsRetry("36", 0.39f) && !FarmCheck.TesseractBNeedsRetry("36", 0.84f) && FarmCheck.TesseractBNeedsRetry(null, 0.9f),
+            "B read in PSM 7: retried in PSM 8 / 13 when empty or under 40%, not otherwise");
+      Check(FarmCheck.RepeatedMajority("999") == "9" && FarmCheck.RepeatedMajority("9 9 9") == "9" && FarmCheck.RepeatedMajority("99") == "9" && FarmCheck.RepeatedMajority("989") == "9"
+            && FarmCheck.RepeatedMajority("98") == null && FarmCheck.RepeatedMajority("987") == null && FarmCheck.RepeatedMajority("9") == null && FarmCheck.RepeatedMajority("9999") == null
+            && FarmCheck.RepeatedMajority("") == null && FarmCheck.RepeatedMajority(null) == null, "repeated lone digit: the majority of 2-3 digits, nothing when inconsistent");
+      var pick1 = FarmCheck.PickTesseractB(new List<(string, string, float)>{ (FarmCheck.PsmLine, "", 0f), (FarmCheck.PsmWord, "36", 0.55f), (FarmCheck.PsmRawLine, "36", 0.84f) }, 2);
+      var pick2 = FarmCheck.PickTesseractB(new List<(string, string, float)>{ (FarmCheck.PsmLine, "", 0f), (FarmCheck.PsmWord, "", 0f), (FarmCheck.PsmRawLine, "", 0f), (FarmCheck.PsmRepeated, "9 9 9", 0.91f) }, 1);
+      var pick3 = FarmCheck.PickTesseractB(new List<(string, string, float)>{ (FarmCheck.PsmLine, "158", 0.96f) }, 3);
+      var pick4 = FarmCheck.PickTesseractB(new List<(string, string, float)>{ (FarmCheck.PsmLine, "", 0f), (FarmCheck.PsmRepeated, "987", 0.95f) }, 1);
+      var pick5 = FarmCheck.PickTesseractB(new List<(string, string, float)>{ (FarmCheck.PsmLine, "58", 0.3f), (FarmCheck.PsmRepeated, "888", 0.95f) }, 2);
+      var pick6 = FarmCheck.PickTesseractB(new List<(string, string, float)>{ (FarmCheck.PsmLine, "7", 0.9f), (FarmCheck.PsmRepeated, "777", 0.9f) }, 1);
+      Check(pick1 == ("36", 0.84f, FarmCheck.PsmRawLine) && pick2 == ("9", 0.91f, FarmCheck.PsmRepeated) && pick3 == ("158", 0.96f, FarmCheck.PsmLine)
+            && pick4 == (null, 0f, null) && pick5 == (null, 0f, null) && pick6 == ("7", 0.9f, FarmCheck.PsmLine),
+            $"B picks the most confident page mode; the repeated digit counts as its majority, only for a lone digit and when consistent ({pick1}, {pick2}, {pick3}, {pick4}, {pick5}, {pick6})");
     }
     var rawPic = FarmCheck.RawCountPicture(new Img(4, 3, Enumerable.Repeat((byte)200, 48).ToArray()));
     Check(rawPic.W == 4 * 3 + 60 && rawPic.H == 3 * 3 + 60 && rawPic.Px[0] == 30, "raw 3x picture for Tesseract: region 3x with a dark margin");

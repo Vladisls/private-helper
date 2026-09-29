@@ -400,14 +400,6 @@ namespace CAHelper
         // ---------- digits ----------
         static bool White(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b)); return mn >= 165 && mx - mn < 70; }
         static bool Dark(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); return Math.Max(r, Math.Max(g, b)) < 70; }
-        /// Light, uncoloured and next to the dark outline: the anti-aliased edge of an outlined white stroke.
-        static bool StrokePx(Img img, int x, int y)
-        {
-            img.Rgb(x, y, out int r, out int g, out int b); int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b));
-            if (mn < 110 || mx - mn >= 70) return false;
-            for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) if (Dark(img, x + dx, y + dy)) return true;
-            return false;
-        }
         /// White pixel with a dark outline next to it: stack digits have one, icon glows don't.
         static bool DigitPx(Img img, int x, int y)
         {
@@ -515,8 +507,8 @@ namespace CAHelper
         /// The raw pixels of the count region of a slot (for the text reader), or null.
         public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount) => CountRegionImage(img, g, r, c, out glyphCount, out _);
 
-        /// Same, plus the count's digits alone (DigitsMask: the glyph chain's own pixels, black on white, the size of
-        /// the region). Both null when the slot has no count drawn.
+        /// Same, plus the count's digits alone (DigitsMask: black on white, the size of the region). glyphCount is
+        /// then the number of digits in that picture. Both null when the slot has no count drawn.
         public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount, out Img digits)
         {
             var band = CropImg(img, DigitBand(g, r, c));
@@ -524,66 +516,245 @@ namespace CAHelper
             glyphCount = chain.Count;
             var region = CountRegion(chain, band.W, band.H);
             if (region == null) { digits = null; return null; }
-            digits = DigitsMask(band, chain, region.Value);
+            digits = DigitsMask(band, chain, region.Value, out var found);
+            glyphCount = found.Count;                                               // the digits picture B really holds
             return CropImg(band, region.Value);
         }
 
-        /// The count's digits and nothing else: inside `region` of the band, the pixels of the glyph chain's connected
-        /// components (outlined white pixels inside the chain's boxes, the same test CountGlyphs uses, grown into the
-        /// light anti-aliased pixels touching them) in black, all else white. Only the right-aligned chain is kept, so
-        /// no icon pixel gets in (a leading digit that touches the icon isn't in the chain either). No shapes are stored.
-        public static Img DigitsMask(Img band, IList<Rectangle> chain, Rectangle region)
+        /// The count's digits and nothing else, black on white, the size of `region` (band coordinates): Tesseract
+        /// input B. Generic, no stored shapes and no absolute pixel sizes; everything is measured on the count's last
+        /// glyph (the rightmost of the chain, which never touches the icon): its height h, its stroke brightness and
+        /// its stroke thickness.
+        ///  (a) digit pixels: seeds at least 90% as bright as that glyph's strokes (the 90th percentile of its white
+        ///      pixels' brightest channel) and nearly uncoloured (max-min under 10% of it), plus the pixels right next
+        ///      to a seed that are at least 80% as bright and as uncoloured (thin anti-aliased strokes stay whole).
+        ///      Digit strokes are pure white while icon rims are dimmer and tinted, so a digit that touches the icon
+        ///      comes apart from it here. Solid blobs (icon shine: a square about twice the stroke thickness fits in
+        ///      them, never in a stroke) are dropped with a pixel around them. Thin gaps across a stroke (up to 12% of
+        ///      h, e.g. a line drawn over the digits) are bridged.
+        ///  (b) connected components (8-neighbour); specks (under 4% of the last glyph's pixels or under 0.4 h) dropped.
+        ///  (c) chained from the right: a component is a digit when its height is 0.7-1.35 h and its bottom within
+        ///      0.3 h of the last glyph's; the walk goes left while the gap stays under 0.7 digit widths (digit width
+        ///      0.7 h), at most 5 digits. A component wider than one digit's ink (a digit merged with a neighbour or
+        ///      with icon pixels) is split: cut one digit width off its right edge (digits have a fixed advance) at the
+        ///      emptiest column there, which is left white, and the parts go back into the walk. A component whose
+        ///      pixel runs are much thicker than the last glyph's strokes is a blob, not a digit.
+        ///      Pixels of a digit above or below the last glyph's rows are then cut off (icon stuck on top).
+        ///  (d) each digit's anti-aliased edge (light, uncoloured pixels between it and its dark outline, one pixel
+        ///      deep, inside its own box and never touching another digit) is filled in.
+        /// `digits` = the digits' boxes (region coordinates), left to right: one black component each.
+        public static Img DigitsMask(Img band, IList<Rectangle> chain, Rectangle region) => DigitsMask(band, chain, region, out _);
+
+        public static Img DigitsMask(Img band, IList<Rectangle> chain, Rectangle region, out List<Rectangle> digits)
         {
             region = Rectangle.Intersect(region, new Rectangle(0, 0, band.W, band.H));
             if (region.Width <= 0 || region.Height <= 0) throw new ArgumentException($"digits region is empty ({region.Width}x{region.Height})");
-            var px = new byte[region.Width * region.Height * 4];
+            int W = region.Width, H = region.Height;
+            var px = new byte[W * H * 4];
             for (int i = 0; i < px.Length; i++) px[i] = 255;
-            double digitH = chain == null || chain.Count == 0 ? 0 : chain.Max(c => c.Height);    // the chain's own digit height
-            foreach (var b0 in chain ?? new List<Rectangle>())
+            digits = new List<Rectangle>();
+            if (chain == null || chain.Count == 0) return new Img(W, H, px);
+            var anchor = Rectangle.Intersect(chain[chain.Count - 1], region);
+            if (anchor.Width <= 0 || anchor.Height <= 0) return new Img(W, H, px);
+            anchor.Offset(-region.X, -region.Y);
+            double h = anchor.Height, dw = 0.7 * h, inkW = Math.Max(anchor.Width, 0.6 * h);   // digit advance, widest digit ink
+            int Mx(int x, int y) { band.Rgb(region.X + x, region.Y + y, out int r, out int g, out int b); return Math.Max(r, Math.Max(g, b)); }
+            int Sat(int x, int y) { band.Rgb(region.X + x, region.Y + y, out int r, out int g, out int b); return Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b)); }
+
+            // (a) the last glyph's stroke brightness; seeds, and the anti-aliased pixels right next to them
+            var lv = new List<int>();
+            for (int y = anchor.Top; y < anchor.Bottom; y++) for (int x = anchor.Left; x < anchor.Right; x++)
+                if (White(band, region.X + x, region.Y + y)) lv.Add(Mx(x, y));
+            if (lv.Count == 0) return new Img(W, H, px);
+            lv.Sort();
+            double peak = lv[(int)Math.Round(0.9 * (lv.Count - 1))], maxSat = 0.1 * peak;
+            var m = new bool[W * H];
+            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) m[y * W + x] = Mx(x, y) >= 0.9 * peak && Sat(x, y) < maxSat;
+            var grow = new List<int>();
+            for (int j0 = 0; j0 < W * H; j0++)
             {
-                var b = Rectangle.Intersect(b0, region);
-                if (b.Width <= 0 || b.Height <= 0) continue;
-                // seeds: the outlined white pixels CountGlyphs found; grown (8-neighbour, inside the glyph's box) into
-                // the bright uncoloured pixels next to them, i.e. the anti-aliased parts of the same stroke
-                var keep = new bool[b.Width * b.Height]; var st = new Stack<(int, int)>();
-                for (int y = b.Top; y < b.Bottom; y++) for (int x = b.Left; x < b.Right; x++)
-                    if (DigitPx(band, x, y)) { keep[(y - b.Y) * b.Width + x - b.X] = true; st.Push((x, y)); }
-                while (st.Count > 0)
+                if (!m[j0]) continue;
+                int x0 = j0 % W, y0 = j0 / W;
+                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
                 {
-                    var (x0, y0) = st.Pop();
-                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-                    {
-                        int x = x0 + dx, y = y0 + dy;
-                        if (x < b.Left || y < b.Top || x >= b.Right || y >= b.Bottom || keep[(y - b.Y) * b.Width + x - b.X] || !StrokePx(band, x, y)) continue;
-                        keep[(y - b.Y) * b.Width + x - b.X] = true; st.Push((x, y));
-                    }
-                }
-                // pieces much shorter than the chain's digits are specks (icon shine merged into the box), not strokes
-                var lab = new int[keep.Length]; int n = 0;
-                for (int i0 = 0; i0 < keep.Length; i0++)
-                {
-                    if (!keep[i0] || lab[i0] != 0) continue;
-                    n++; var piece = new List<int> { i0 }; lab[i0] = n; int top = i0 / b.Width, bottom = top;
-                    for (int k = 0; k < piece.Count; k++)
-                    {
-                        int px0 = piece[k] % b.Width, py0 = piece[k] / b.Width;
-                        top = Math.Min(top, py0); bottom = Math.Max(bottom, py0);
-                        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-                        {
-                            int x = px0 + dx, y = py0 + dy, j = y * b.Width + x;
-                            if (x < 0 || y < 0 || x >= b.Width || y >= b.Height || !keep[j] || lab[j] != 0) continue;
-                            lab[j] = n; piece.Add(j);
-                        }
-                    }
-                    if (bottom - top + 1 < digitH * 0.4) continue;
-                    foreach (int j in piece)
-                    {
-                        int o = ((b.Y + j / b.Width - region.Y) * region.Width + (b.X + j % b.Width - region.X)) * 4;
-                        px[o] = px[o + 1] = px[o + 2] = 0;
-                    }
+                    int x = x0 + dx, y = y0 + dy;
+                    if (x >= 0 && y >= 0 && x < W && y < H && !m[y * W + x] && Mx(x, y) >= 0.8 * peak && Sat(x, y) < maxSat) grow.Add(y * W + x);
                 }
             }
-            return new Img(region.Width, region.Height, px);
+            foreach (int j in grow) m[j] = true;
+
+            // stroke thickness of the last glyph (median horizontal run); solid blobs are dropped
+            var anchorPx = new List<int>();
+            for (int y = anchor.Top; y < anchor.Bottom; y++) for (int x = anchor.Left; x < anchor.Right; x++) if (m[y * W + x]) anchorPx.Add(y * W + x);
+            double stroke = Math.Max(1, MedianRun(anchorPx, W));
+            int side = (int)Math.Ceiling(2 * stroke) + 1;
+            var sum = new int[(W + 1) * (H + 1)];
+            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+                sum[(y + 1) * (W + 1) + x + 1] = (m[y * W + x] ? 1 : 0) + sum[y * (W + 1) + x + 1] + sum[(y + 1) * (W + 1) + x] - sum[y * (W + 1) + x];
+            var blob = new bool[W * H];
+            for (int y = 0; y + side <= H; y++) for (int x = 0; x + side <= W; x++)
+            {
+                int n = sum[(y + side) * (W + 1) + x + side] - sum[y * (W + 1) + x + side] - sum[(y + side) * (W + 1) + x] + sum[y * (W + 1) + x];
+                if (n < side * side) continue;
+                for (int yy = Math.Max(0, y - 1); yy < Math.Min(H, y + side + 1); yy++) for (int xx = Math.Max(0, x - 1); xx < Math.Min(W, x + side + 1); xx++) blob[yy * W + xx] = true;
+            }
+            for (int j = 0; j < W * H; j++) if (blob[j]) m[j] = false;
+
+            // thin gaps across a stroke: bridged from the lowest pixel of a run to the next pixel below (straight or
+            // one column aside) when nothing lies in between
+            int gapMax = Math.Max(1, (int)Math.Round(0.12 * h));
+            var closed = (bool[])m.Clone();
+            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+            {
+                if (!m[y * W + x] || (y + 1 < H && m[(y + 1) * W + x])) continue;
+                for (int g = 2; g <= gapMax + 1 && y + g < H; g++)
+                {
+                    bool done = false;
+                    for (int dx = -1; dx <= 1 && !done; dx++)
+                    {
+                        int x2 = x + dx; if (x2 < 0 || x2 >= W || !m[(y + g) * W + x2]) continue;
+                        bool empty = true;
+                        for (int t = 1; t < g && empty; t++) for (int ex = Math.Min(x, x2); ex <= Math.Max(x, x2); ex++) if (m[(y + t) * W + ex]) { empty = false; break; }
+                        if (!empty) continue;
+                        for (int t = 1; t < g; t++) closed[(y + t) * W + x + (int)Math.Round(dx * (double)t / g)] = true;
+                        done = true;
+                    }
+                    if (done) break;
+                    bool sideways = false;                                                  // the stroke goes on beside: no gap
+                    for (int dx = -1; dx <= 1; dx++) { int x2 = x + dx; if (x2 >= 0 && x2 < W && m[(y + g - 1) * W + x2]) sideways = true; }
+                    if (sideways) break;
+                }
+            }
+            m = closed;
+
+            // (b) components; specks dropped
+            int anchorArea = 0;
+            for (int y = anchor.Top; y < anchor.Bottom; y++) for (int x = anchor.Left; x < anchor.Right; x++) if (m[y * W + x]) anchorArea++;
+            bool Speck(List<int> c, Rectangle b) => c.Count < 0.04 * anchorArea || b.Height < 0.4 * h;
+            var cand = Components(m, W, H).Where(c => !Speck(c.pixels, c.box)).ToList();
+
+            // (c) chain from the right, splitting over-wide components
+            var accepted = new List<(List<int> pixels, Rectangle box)>();
+            var cut = new bool[W * H];                                                  // cut columns stay white
+            bool Fits(Rectangle b) => b.Height >= 0.7 * h && b.Height <= 1.35 * h && Math.Abs(b.Bottom - anchor.Bottom) <= 0.3 * h;
+            int lastLeft = int.MaxValue;
+            while (accepted.Count < 5)
+            {
+                // the next component to the left (it may overlap the last digit's columns a little)
+                var next = cand.Where(c => lastLeft == int.MaxValue || (c.box.Right <= lastLeft + 0.3 * dw && c.box.X + c.box.Width / 2.0 < lastLeft))
+                               .OrderByDescending(c => c.box.Right).FirstOrDefault();
+                if (next.pixels == null) break;
+                cand.Remove(next);
+                if (accepted.Count > 0 && lastLeft - next.box.Right >= 0.7 * dw) break;     // gap: the count has ended
+                if (!Fits(next.box)) continue;                                               // icon remains: skip
+                if (next.box.Width > 1.2 * inkW)
+                {
+                    // cut one digit width off the right edge, at the emptiest column there (rather a little to the
+                    // left, where the gap before the digit is)
+                    var colN = new int[W];
+                    foreach (int j in next.pixels) colN[j % W]++;
+                    double expect = next.box.Right - dw - 0.5;
+                    int lo = Math.Max(next.box.Left + 1, (int)Math.Round(expect - 0.15 * h)), hi = Math.Min(next.box.Right - 2, (int)Math.Round(expect + 0.05 * h));
+                    int at = -1; double best = double.MaxValue;
+                    for (int x = lo; x <= hi; x++) { double score = colN[x] + Math.Abs(x - expect) * 1e-3; if (score < best) { best = score; at = x; } }
+                    if (at < 0) continue;
+                    for (int y = 0; y < H; y++) cut[y * W + at] = true;
+                    var rest = new bool[W * H];
+                    foreach (int j in next.pixels) if (j % W != at) rest[j] = true;
+                    cand.AddRange(Components(rest, W, H).Where(p => !Speck(p.pixels, p.box)));
+                    continue;
+                }
+                if (MedianRun(next.pixels, W) > 2.5 * stroke) continue;                     // a solid blob, not strokes
+                accepted.Add(next);
+                lastLeft = next.box.Left;
+            }
+            // pixels above or below the count's line (the last glyph's rows) are icon stuck to a digit: cut off, with
+            // any speck that leaves
+            if (accepted.Count > 0)
+            {
+                int lineTop = accepted[0].box.Top, lineBottom = accepted[0].box.Bottom;
+                for (int i = 0; i < accepted.Count; i++)
+                {
+                    var inLine = new bool[W * H];
+                    foreach (int j in accepted[i].pixels) if (j / W >= lineTop && j / W < lineBottom) inLine[j] = true;
+                    var parts = Components(inLine, W, H).Where(c => !Speck(c.pixels, c.box)).ToList();
+                    if (parts.Count > 0) accepted[i] = (parts.SelectMany(c => c.pixels).ToList(), parts.Select(c => c.box).Aggregate(Rectangle.Union));
+                }
+            }
+
+            // (d) render, each digit's anti-aliased edge filled in
+            var owner = new int[W * H];                                                 // 0 = white, else digit index + 1
+            for (int i = 0; i < accepted.Count; i++) foreach (int j in accepted[i].pixels) owner[j] = i + 1;
+            for (int i = 0; i < accepted.Count; i++)
+            {
+                var (pixels, box) = accepted[i];
+                var add = new List<int>();
+                foreach (int j in pixels)
+                {
+                    int x0 = j % W, y0 = j / W;
+                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int x = x0 + dx, y = y0 + dy, k = y * W + x;
+                        if (x < box.Left || x >= box.Right || y < box.Top || y >= box.Bottom || owner[k] != 0 || cut[k]) continue;
+                        if (Mx(x, y) < 0.55 * peak || Sat(x, y) >= 1.5 * maxSat) continue;
+                        bool nearDark = false, nearOther = false;
+                        for (int ey = -1; ey <= 1; ey++) for (int ex = -1; ex <= 1; ex++)
+                        {
+                            int xx = x + ex, yy = y + ey;
+                            if (Mx(xx, yy) < 0.3 * peak) nearDark = true;
+                            if (xx >= 0 && yy >= 0 && xx < W && yy < H && owner[yy * W + xx] != 0 && owner[yy * W + xx] != i + 1) nearOther = true;
+                        }
+                        if (nearDark && !nearOther) add.Add(k);
+                    }
+                }
+                foreach (int k in add) owner[k] = i + 1;
+            }
+            for (int j = 0; j < W * H; j++) if (owner[j] != 0) px[j * 4] = px[j * 4 + 1] = px[j * 4 + 2] = 0;
+            digits = accepted.Select(a => a.box).OrderBy(b => b.X).ToList();
+            return new Img(W, H, px);
+        }
+
+        /// The median length of the horizontal runs of a pixel set (indices into a W-wide picture): the stroke
+        /// thickness of a drawn glyph, the width of a solid blob.
+        static double MedianRun(IEnumerable<int> pixels, int W)
+        {
+            var runs = new List<int>(); int prev = int.MinValue, len = 0;
+            foreach (int j in pixels.OrderBy(q => q))
+            {
+                if (j == prev + 1 && j % W != 0) len++;
+                else { if (len > 0) runs.Add(len); len = 1; }
+                prev = j;
+            }
+            if (len > 0) runs.Add(len);
+            if (runs.Count == 0) return 0;
+            runs.Sort();
+            return runs[runs.Count / 2];
+        }
+
+        /// 8-connected components of a mask (W x H): pixel indices and bounding box of each.
+        static List<(List<int> pixels, Rectangle box)> Components(bool[] m, int W, int H)
+        {
+            var seen = new bool[W * H];
+            var list = new List<(List<int>, Rectangle)>();
+            for (int i0 = 0; i0 < m.Length; i0++)
+            {
+                if (!m[i0] || seen[i0]) continue;
+                var piece = new List<int> { i0 }; seen[i0] = true;
+                int minX = i0 % W, maxX = minX, minY = i0 / W, maxY = minY;
+                for (int k = 0; k < piece.Count; k++)
+                {
+                    int x0 = piece[k] % W, y0 = piece[k] / W;
+                    minX = Math.Min(minX, x0); maxX = Math.Max(maxX, x0); minY = Math.Min(minY, y0); maxY = Math.Max(maxY, y0);
+                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int x = x0 + dx, y = y0 + dy, j = y * W + x;
+                        if (x < 0 || y < 0 || x >= W || y >= H || !m[j] || seen[j]) continue;
+                        seen[j] = true; piece.Add(j);
+                    }
+                }
+                list.Add((piece, Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1)));
+            }
+            return list;
         }
 
         /// Tesseract input B ("digits-isolated 3x"): a DigitsMask enlarged `f` times by pixel repetition (it stays pure
@@ -611,9 +782,11 @@ namespace CAHelper
             return Compose(CountVariantNames[0], Enlarge(region, 3), 3, 0, region.H, 30, null, null, null).Item2;
         }
 
-        /// The names of the two Tesseract inputs (diagnostics, and the OCR test sheet's last two columns). The count
-        /// read tries the digits-isolated picture first, then the raw one.
-        public const string TessDigitsName = "tesseract digits-isolated 3x", TessRawName = "tesseract raw 3x";
+        /// The names of the two Tesseract inputs (diagnostics, and the OCR test sheet's Tesseract columns), and of the
+        /// sheet's column with the digits picture's retries (PSM 8 / PSM 13, and the repeated lone digit). The count
+        /// read uses the digits-isolated picture, and the raw one only when that gives nothing.
+        public const string TessDigitsName = "tesseract digits-isolated 3x", TessRawName = "tesseract raw 3x",
+                            TessDigitsRetryName = "tesseract B psm8/13, x3";
 
         /// Tesseract's mean confidence (0..1) below this counts as "not read".
         public const float TessMinConfidence = 0.40f;
@@ -637,36 +810,86 @@ namespace CAHelper
         }
 
         /// Source labels of DecideTesseract (digits picture, diagnostics log).
-        public const string TessAgree = "tesseract A+B agree", TessALonger = "tesseract A (longer)", TessB = "tesseract B",
-                            TessA = "tesseract A", TessDisagree = "tesseract disagree";
+        public const string TessAgree = "tesseract A+B agree", TessB = "tesseract B", TessA = "tesseract A", TessBOverA = "tesseract B (A differs)";
 
-        /// The count from both Tesseract reads of a slot: A = raw 3x, B = digits-isolated 3x (text + mean confidence;
-        /// null text = not read / no picture). A read counts with >= 40% confidence and 1-5 digits.
-        ///  only one reads          -> that one
-        ///  both, equal             -> it ("agree")
-        ///  both, A ends with B and is longer -> A (B lost a leading digit that touched the icon)
-        ///  both, otherwise         -> B (icon-free), "disagree", not confident; A instead when only A passes the
-        ///                             chain check (AcceptIsolatedCount: as many digits as glyphs, no leading zero)
-        /// The chain check is only a tie-break / confidence signal: chain glyph counts are not reliable enough to reject.
+        /// The count from the Tesseract reads of a slot: B = digits-isolated 3x (the best of its page modes,
+        /// PickTesseractB), A = raw 3x, read only when B gave nothing (text + mean confidence; null text = not read /
+        /// no picture). A read counts with >= 40% confidence and 1-5 digits. The raw picture is never trusted over B:
+        /// it reads icon remains as digits with fair confidence.
+        ///  only B reads   -> B, confident when it matches the digits picture (AcceptIsolatedCount)
+        ///  only A reads   -> A, never confident (the smoother waits for it to repeat)
+        ///  both read      -> B ("agree" and confident when equal, else confident as for B alone)
         /// confident = false tells the smoother not to take the count at once.
         public static (int? count, string source, bool confident) DecideTesseract(string textA, float confA, string textB, float confB, int glyphCount)
         {
             string a = TesseractDigits(textA, confA, false), b = TesseractDigits(textB, confB, true);
             int? N(string d) => d == null ? (int?)null : int.Parse(d, CultureInfo.InvariantCulture);
-            bool bChain(string d) => AcceptIsolatedCount(d, glyphCount);
             if (a == null && b == null) return (null, "none", false);
-            if (a == null) return (N(b), TessB, bChain(b));
-            if (b == null) return (N(a), TessA, true);
-            if (N(a) == N(b)) return (N(a), TessAgree, true);
-            if (a.Length > b.Length && a.EndsWith(b, StringComparison.Ordinal)) return (N(a), TessALonger, true);
-            // real disagreement: B unless only A is consistent with the glyph chain
-            bool aChain = a.Length == glyphCount && (a.Length == 1 || a[0] != '0');
-            return !bChain(b) && aChain ? (N(a), TessDisagree, false) : (N(b), TessDisagree, false);
+            if (b == null) return (N(a), TessA, false);
+            if (a != null && N(a) == N(b)) return (N(b), TessAgree, true);
+            return (N(b), a == null ? TessB : TessBOverA, AcceptIsolatedCount(b, glyphCount));
         }
 
-        /// A digits-only read is trusted only if it matches the glyph chain it was drawn from: as many digits as chain
-        /// glyphs and no leading zero (counts have none). A leading digit that touches the icon is not in the chain,
-        /// so "208" can come out as "08": that read is refused and the raw picture is tried instead.
+        /// Tesseract page modes for the digits picture: single line (PSM 7) first; single word (PSM 8) and raw line
+        /// (PSM 13) when that gives nothing or under 40%; and for a lone digit the picture with it three times
+        /// (RepeatedDigitPicture) read as a line, since a line of one glyph often comes back empty.
+        public const string PsmLine = "psm7", PsmWord = "psm8", PsmRawLine = "psm13", PsmRepeated = "x3 psm7";
+
+        /// True when a PSM 7 read of the digits picture needs the PSM 8 / PSM 13 retries (nothing or under 40%).
+        public static bool TesseractBNeedsRetry(string text, float confidence) => TesseractDigits(text, confidence, true) == null;
+
+        /// The digit a read of RepeatedDigitPicture stands for: the digit most of its 2-3 digits agree on (spaces
+        /// dropped), or null when the read is not consistent (other lengths, no majority).
+        public static string RepeatedMajority(string text)
+        {
+            if (text == null) return null;
+            var d = new string(text.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+            if (d.Length < 2 || d.Length > 3 || !d.All(char.IsDigit)) return null;
+            var top = d.GroupBy(ch => ch).OrderByDescending(g => g.Count()).First();
+            return top.Count() * 2 > d.Length ? top.Key.ToString() : null;
+        }
+
+        /// The best of the digits picture's Tesseract reads (mode, text, confidence): the highest confidence among
+        /// those that give a count (1-5 digits, >= 40%); a repeated-digit read (PsmRepeated) counts as its majority
+        /// digit, and only when the picture has one digit. On equal confidence the earlier read wins. (null, 0, null)
+        /// when none gives a count; then the text/confidence of the first read are returned for the notes.
+        public static (string text, float conf, string mode) PickTesseractB(IList<(string mode, string text, float conf)> reads, int glyphCount)
+        {
+            (string text, float conf, string mode) best = (null, 0f, null);
+            foreach (var (mode, text, conf) in reads ?? new List<(string, string, float)>())
+            {
+                string t = mode == PsmRepeated ? (glyphCount == 1 ? RepeatedMajority(text) : null) : text;
+                if (TesseractDigits(t, conf, true) == null) continue;
+                if (best.text == null || conf > best.conf) best = (t, conf, mode);
+            }
+            return best;
+        }
+
+        /// A one-digit digits mask (black on white) as the digit three times with a space between (its own height
+        /// apart), the Tesseract input for PsmRepeated: enlarged `f` times with a white margin like
+        /// DigitsIsolatedPicture. null when the mask has no black pixel.
+        public static Img RepeatedDigitPicture(Img mask, int f = 3)
+        {
+            if (mask == null || mask.W <= 0 || mask.H <= 0) return null;
+            int x0 = mask.W, x1 = -1, y0 = mask.H, y1 = -1;
+            for (int y = 0; y < mask.H; y++) for (int x = 0; x < mask.W; x++)
+                if (mask.Px[(y * mask.W + x) * 4] == 0) { x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y); }
+            if (x1 < 0) return null;
+            int gw = x1 - x0 + 1, gh = y1 - y0 + 1, space = gh, m = 2, W = 3 * gw + 2 * space + 2 * m, H = gh + 2 * m;
+            var px = new byte[W * H * 4];
+            for (int i = 0; i < px.Length; i++) px[i] = 255;
+            for (int k = 0; k < 3; k++)
+                for (int y = 0; y < gh; y++) for (int x = 0; x < gw; x++)
+                {
+                    if (mask.Px[((y0 + y) * mask.W + x0 + x) * 4] != 0) continue;
+                    int o = ((m + y) * W + m + k * (gw + space) + x) * 4;
+                    px[o] = px[o + 1] = px[o + 2] = 0;
+                }
+            return DigitsIsolatedPicture(new Img(W, H, px), f);
+        }
+
+        /// A digits-only read is trusted at once only if it matches the digits picture it was read from: as many
+        /// digits as the picture has digits and no leading zero (counts have none).
         public static bool AcceptIsolatedCount(string text, int glyphCount)
         {
             var d = new string((text ?? "").Where(char.IsDigit).ToArray());
