@@ -280,11 +280,7 @@ namespace CAHelper
                 var words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l);
                 LastWords = words;
                 var mapped = FarmCheck.MapStripWords(words, present.Count, bh, DigitGap, DigitEnlarge);
-                for (int k = 0; k < present.Count; k++)
-                {
-                    int i = present[k];
-                    if (mapped[k].HasValue && mapped[k].Value.ToString(CultureInfo.InvariantCulture).Length == cellCounts[i]) result[i] = mapped[k];
-                }
+                for (int k = 0; k < present.Count; k++) result[present[k]] = mapped[k];
                 return result;
             }
         }

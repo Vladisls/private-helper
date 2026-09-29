@@ -3,6 +3,7 @@ static class T {
   static int fail = 0;
   static void Check(bool ok, string name){ Console.WriteLine((ok?"PASS ":"FAIL ")+name); if(!ok) fail++; }
   static TimeSpan S(double s)=>TimeSpan.FromSeconds(s);
+  static bool FarrmSafe() => FarmCheck.TrailingCount("")==null && FarmCheck.TrailingCount("2 34")==34;
   static int Main(){
     var p = new List<string>();
     var s = Settings.Parse("", p);
@@ -426,6 +427,19 @@ static class T {
           }
         }
       }
+      // generic count region: anchored on the last glyph, covers the whole count, on every capture
+      foreach (var (nm3, im3, box3, names3) in new[]{ ("inv", inv, (1912,248,612,612), "3,208,144,14,9,5,34,158,16,2"), ("mis", Load(fmis), (815,160,620,620), "3,223,172,14,9,5,34,158,16,2") }) {
+        var gr = FarmCheck.BestRead(im3, FarmCheck.FindGrid(im3, box3.Item1, box3.Item2, box3.Item3, box3.Item4), FarmCheck.DefaultIcons(), digs);
+        int okR = 0; var info = new List<string>();
+        foreach (var sl in gr.slots.OrderBy(x => x.Row * 8 + x.Col)) {
+          var br = FarmCheck.DigitBand(gr.grid, sl.Row, sl.Col); var bi = Crop(im3, br.X, br.Y, br.Width, br.Height);
+          var reg = FarmCheck.CountRegion(bi, gr.grid.Scale); var cells = FarmCheck.CountCells(bi, gr.grid.Scale, digs);
+          bool covers = reg.HasValue && cells.Count > 0 && reg.Value.X <= cells[0].X + 2 && reg.Value.Right >= cells[cells.Count - 1].Right - 1;
+          if (covers) okR++; info.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right}" : "none")} digits {(cells.Count > 0 ? $"{cells[0].X}-{cells[cells.Count-1].Right}" : "?")}");
+        }
+        Console.WriteLine($"REGION {nm3}: " + string.Join(" | ", info));
+        Check(okR == 10, $"{nm3}: the generic count region covers every count ({okR}/10)");
+      }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
@@ -497,6 +511,8 @@ static class T {
     Check(split[0]==158, "a count the reader splits into two words is joined in x order");
     var gi0 = new Grid { X = 1919, Y = 253, PitchX = 76.75, PitchY = 76.75 }; var band = FarmCheck.DigitBand(gi0, 0, 1);
     Check(band.Width >= 55 && band.Height >= 15 && band.X > gi0.X + gi0.PitchX && band.X < gi0.X + 2 * gi0.PitchX, "digit band sits inside its slot");
+    Check(FarmCheck.TrailingCount("158")==158 && FarmCheck.TrailingCount("x.158")==158 && FarmCheck.TrailingCount("l58")==158 && FarmCheck.TrailingCount("1158")==1158
+          && FarmCheck.TrailingCount("abc")==null && FarrmSafe(), "trailing-digit rule: junk on the left is dropped");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
     var rr = FarmCheck.ParseEndWindow(endLines);
     Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");

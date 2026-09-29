@@ -127,9 +127,12 @@ FARM TRACKER
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
-- Stack counts: the count is anchored on its last digit (the one that never touches the icon), then
-  fixed digit cells are checked leftwards while they hold a digit. Those cells are read by shape and,
-  as a cross-check, by Windows' text reader (which must return exactly that many digits).
+- Stack counts are read by Windows' text reader, generically: the count region is found from the size
+  and position of the digit glyphs only (anchored on the last digit, which never touches the icon),
+  its raw pixels are enlarged and read, and the count is the trailing run of digits (icon remains the
+  reader turns into characters sit on the left and are dropped). No font shapes are assumed, so a
+  font change or another resolution doesn't matter. Built-in digit shapes are only a last resort for
+  a slot the reader returns nothing for.
 - Diagnostics: when a count changes between reads or the two readers disagree, the strip the reader
   saw (cabal-helper-farm-digits-N.png) and the exact inventory frame (cabal-helper-farm-frame-N.png)
   are saved, last 5 of each.

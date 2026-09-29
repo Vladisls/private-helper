@@ -641,13 +641,7 @@ namespace CAHelper
                 if (i < 0 || i >= bands || cy - i * (bandH + gap) > bandH) continue;
                 text[i] = (text[i] ?? "") + w.Text;
             }
-            for (int i = 0; i < bands; i++)
-            {
-                if (text[i] == null) continue;
-                // keep digits; readers sometimes see l/I/| for 1 and O for 0
-                var digits = new string(text[i].Select(ch => ch == 'l' || ch == 'I' || ch == '|' ? '1' : ch == 'O' || ch == 'o' ? '0' : ch).Where(char.IsDigit).ToArray());
-                if (digits.Length >= 1 && digits.Length <= 5) result[i] = int.Parse(digits, CultureInfo.InvariantCulture);
-            }
+            for (int i = 0; i < bands; i++) result[i] = TrailingCount(text[i]);
             return result;
         }
 
@@ -704,6 +698,41 @@ namespace CAHelper
 
         /// The count region of a slot for the text reader: only the validated digit cells, as dark digits on white.
         /// Returns null when the band holds no readable count. cellCount = how many digits the reader must return.
+        /// Where the count sits in a digit band, without any font knowledge: anchored on the rightmost digit-sized
+        /// glyph (counts are right-aligned and the last digit never touches the icon) and extending left by up to
+        /// five digit widths, where a digit width is taken from the glyph's own height. null = no glyph at all.
+        public static Rectangle? CountRegion(Img band, double scale)
+        {
+            var glyphs = CountGlyphs(band, scale);
+            if (glyphs.Count == 0) return null;
+            var last = glyphs[glyphs.Count - 1];
+            double digitW = Math.Max(6, last.Height * 0.7);
+            int left = Math.Max(0, (int)Math.Round(last.Right - 5 * digitW));
+            int top = Math.Max(0, last.Y - 2), bottom = Math.Min(band.H, last.Bottom + 2);
+            return Rectangle.FromLTRB(left, top, Math.Min(band.W, last.Right + 2), bottom);
+        }
+
+        /// The raw pixels of the count region of a slot (for the text reader), or null.
+        public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount)
+        {
+            var band = CropImg(img, DigitBand(g, r, c));
+            glyphCount = CountGlyphs(band, g.Scale).Count;
+            var region = CountRegion(band, g.Scale);
+            return region == null ? null : CropImg(band, region.Value);
+        }
+
+        /// The count in a text-reader result for one region: the trailing run of digits (counts are right-aligned,
+        /// so anything the reader made of icon remains sits on the left). l/I/| count as 1, O/o as 0.
+        public static int? TrailingCount(string text)
+        {
+            if (text == null) return null;
+            var fixedUp = new string(text.Select(ch => ch == 'l' || ch == 'I' || ch == '|' ? '1' : ch == 'O' || ch == 'o' ? '0' : ch).ToArray());
+            int end = fixedUp.Length; while (end > 0 && !char.IsDigit(fixedUp[end - 1])) end--;
+            int start = end; while (start > 0 && char.IsDigit(fixedUp[start - 1])) start--;
+            if (end == start || end - start > 5) return null;
+            return int.Parse(fixedUp.Substring(start, end - start), CultureInfo.InvariantCulture);
+        }
+
         /// raw = true: the original pixels of the digit cells (the reader copes with light text on the icon; the
         /// outline mask would erase digit parts whose outline is lit by the icon). raw = false: outlined pixels only.
         public static Img CountStrip(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, out int cellCount, bool raw = true)
