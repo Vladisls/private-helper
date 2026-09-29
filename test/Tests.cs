@@ -387,6 +387,45 @@ static class T {
         var withPrior = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons, digs, 8, 8, prior);
         Console.WriteLine($"STICKY without prior: {without.Count} slots, with prior: {withPrior.Count} slots");
         Check(withPrior.Count >= without.Count && withPrior.Any(x => x.Item == "Force Core (Low)"), "a previously identified slot stays identified when its icon drifts"); }
+      // live 2.9.8 frame where most counts showed "?": reproduce the read
+      var fq = System.IO.Path.Combine(dataDir, "q.bin");
+      if (System.IO.File.Exists(fq)) {
+        var q = Load(fq);
+        var gq = FarmCheck.LocateByButton(q, 1.0, out double qd);
+        Console.WriteLine($"Q locate by button: {(gq.HasValue ? $"{gq.Value.X:0},{gq.Value.Y:0}" : "none")} diff {qd:0.0}");
+        if (gq.HasValue) {
+          var rq = FarmCheck.ReadInventory(q, gq.Value, FarmCheck.DefaultIcons(), digs).OrderBy(x => x.Row * 8 + x.Col).ToList();
+          Console.WriteLine("Q read: " + string.Join(" | ", rq.Select(x => $"{x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}={(x.Count?.ToString() ?? "?")} d{x.IconDist:0.00}")));
+          Check(rq.Any(x => x.Item == "Upgrade Core (Low)" && x.Count == 9) && rq.Any(x => x.Item == "Upgrade Core (High)" && x.Count == 209), "live frame with bright shine: 9 and 209 read");
+          // distances of the failing cells, and live digit cells with their known values for new templates
+          var dumps = new List<string>();
+          foreach (var (nm2, truth) in new[]{ ("Upgrade Core (Low)", "9"), ("Upgrade Core (High)", "209"), ("Upgrade Core (Medium)", "14") }) {
+            var sl2 = rq.FirstOrDefault(x => x.Item == nm2); if (sl2 == null) continue;
+            var br2 = FarmCheck.DigitBand(gq.Value, sl2.Row, sl2.Col); var bi2 = Crop(q, br2.X, br2.Y, br2.Width, br2.Height);
+            var gl2 = FarmCheck.CountGlyphs(bi2, gq.Value.Scale);
+            int cw = 11, ch = 17; var lastG = gl2[gl2.Count - 1]; int rightG = lastG.Right, bottomG = Math.Max(lastG.Bottom, ch);
+            for (int k = 0; k < truth.Length; k++) {
+              var cell = new System.Drawing.Rectangle(rightG - (k + 1) * cw, bottomG - ch, cw, ch);
+              var chars = new char[cw * ch];
+              for (int y = 0; y < ch; y++) for (int x = 0; x < cw; x++) chars[y * cw + x] = FarmCheck.DigitPxPublic(bi2, cell.X + x, cell.Y + y) ? '#' : '.';
+              string cs = new string(chars); char truthD = truth[truth.Length - 1 - k];
+              var best = digs.Where(t => t.d != '_').Select(t => (t.d, dist: FarmCheck.CellDist(cs, t.cell))).OrderBy(t => t.dist).First();
+              var own = digs.Where(t => t.d == truthD).Select(t => FarmCheck.CellDist(cs, t.cell)).DefaultIfEmpty(-1).Min();
+              Console.WriteLine($"QCELL {nm2} digit '{truthD}': nearest template '{best.d}' at {best.dist}, own digit at {own}");
+              dumps.Add($"            ('{truthD}', \"{cs}\"),   // live 2026-09-29, {nm2}");
+            }
+          }
+          System.IO.File.WriteAllText("/tmp/live-digits.txt", string.Join("\n", dumps) + "\n");
+          foreach (var name in new[]{ "Upgrade Core (Low)", "Upgrade Core (High)", "Upgrade Core (Medium)" }) {
+            var sl = rq.FirstOrDefault(x => x.Item == name); if (sl == null) continue;
+            var br = FarmCheck.DigitBand(gq.Value, sl.Row, sl.Col); var bi = Crop(q, br.X, br.Y, br.Width, br.Height);
+            var cells = FarmCheck.CountCells(bi, gq.Value.Scale, digs); var glyphs = FarmCheck.CountGlyphs(bi, gq.Value.Scale);
+            var sb = new System.Text.StringBuilder();
+            for (int y = 0; y < bi.H; y++) { for (int x = 0; x < bi.W; x++) sb.Append(FarmCheck.DigitPxPublic(bi, x, y) ? '#' : '.'); sb.Append('\n'); }
+            Console.WriteLine($"Q {name}: band {br.X},{br.Y} {br.Width}x{br.Height}; glyphs " + string.Join(" ", glyphs.Select(r => $"[{r.X}-{r.Right-1} y{r.Y}-{r.Bottom-1}]")) + "; cells " + string.Join(" ", cells.Select(r => $"[{r.X}-{r.Right-1} y{r.Y}-{r.Bottom-1}]")) + "\n" + sb);
+          }
+        }
+      }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
