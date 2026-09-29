@@ -309,13 +309,18 @@ namespace CAHelper
                     bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
                     // also what the text reader last received for the counts, with its words and results
                     string digitsPath = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}-digits.png");
-                    PartyOcr.SaveLastStrip(digitsPath);
+                    try { PartyOcr.SaveLastStrip(digitsPath); }
+                    catch (Exception ex) { Debug("digits picture failed: " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace); }
                     Debug("view saved as " + Path.GetFileName(path) + (File.Exists(digitsPath) ? " + " + Path.GetFileName(digitsPath) : ""));
                     Files.OpenFolder(path);
                 }
                 if (!hadOverlay) { overlay.Close(); overlay.Dispose(); overlay = null; }
             }
-            catch (Exception ex) { MessageBox.Show("Could not save the image: " + ex.Message, "Farm Tracker"); }
+            catch (Exception ex)
+            {
+                Debug("save image failed: " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace);
+                MessageBox.Show("Could not save the image: " + ex.Message + "\n\nDetails are in Areas & learning > Diagnostics.", "Farm Tracker");
+            }
         }
 
         void SetOverlay(bool on)

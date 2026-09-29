@@ -212,6 +212,7 @@ namespace CAHelper
 
         public static Bitmap FromImg(Img img)
         {
+            if (img.W <= 0 || img.H <= 0) throw new ArgumentException($"image is empty ({img.W}x{img.H})");
             var bmp = new Bitmap(img.W, img.H, PixelFormat.Format32bppArgb);
             var d = bmp.LockBits(new Rectangle(0, 0, img.W, img.H), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
             try { for (int y = 0; y < img.H; y++) Marshal.Copy(img.Px, y * img.W * 4, d.Scan0 + y * d.Stride, img.W * 4); }
@@ -268,6 +269,7 @@ namespace CAHelper
         /// One count on its own picture: dark margin, optional printed prefix, the region enlarged.
         static Bitmap MakeCountPicture(Img region, int enlarge, bool prefix)
         {
+            if (region == null || region.W <= 0 || region.H <= 0) throw new ArgumentException($"count region is empty ({region?.W}x{region?.H})");
             int pad = 10 * enlarge, prefixW = prefix ? 28 * enlarge : 0;
             var bmp = new Bitmap(prefixW + region.W * enlarge + 2 * pad, region.H * enlarge + 2 * pad, PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(bmp))
