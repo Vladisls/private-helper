@@ -67,7 +67,7 @@ namespace CAHelper
         readonly Dictionary<(int r, int c), string> slotIdentity = new Dictionary<(int, int), string>();   // sticky icon identities per slot
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
         DateTime lastLocate = DateTime.MinValue;
-        bool busyEnd, busyLoot, busyInv; int stripSaves;
+        bool busyEnd, busyLoot, busyInv, busyProbeOcr; int stripSaves;
         readonly Dictionary<string, int> lastCounts = new Dictionary<string, int>();
         string warning; DateTime warningAt;
         readonly HashSet<string> confirmedEmpty = new HashSet<string>();
@@ -396,6 +396,25 @@ namespace CAHelper
                             foreach (var k in slotIdentity.Keys.ToList()) if (!slots.Any(x => x.Row == k.r && x.Col == k.c)) slotIdentity.Remove(k);
                         }
                         ovGrid = g2; ovSlots = slots; ovInv = $"open, contrast {g.Score:0.00}, {slots.Select(x => x.Item).Distinct().Count()} core types";
+                        // Preview counts too (no session): read them with the text reader in the background.
+                        if (pres.Ok && !busyProbeOcr && slots.Count > 0)
+                        {
+                            busyProbeOcr = true;
+                            var copyP = (Bitmap)bmp.Clone(); var gridP = g2; var slotsP = slots;
+                            BeginInvoke((Action)(async () =>
+                            {
+                                try
+                                {
+                                    var imgP = PartyOcr.ToImg(copyP); var stripsP = new List<Img>(); var glyphsP = new List<int>();
+                                    foreach (var sl in slotsP) { stripsP.Add(FarmCheck.CountRegionImage(imgP, gridP, sl.Row, sl.Col, out int n)); glyphsP.Add(n); }
+                                    var ocrP = await PartyOcr.ReadCountStripsAsync(stripsP, glyphsP);
+                                    for (int i = 0; i < slotsP.Count; i++) slotsP[i].Count = ocrP[i] ?? (glyphsP[i] == 0 ? 1 : (int?)null);
+                                    if (!running) { ovSlots = slotsP; DrawOverlay(); }
+                                }
+                                catch (Exception ex) { Debug("preview count read failed: " + ex.Message, "previewocr"); }
+                                finally { copyP.Dispose(); busyProbeOcr = false; }
+                            }));
+                        }
                         double td = coreTab == null ? -1 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, g2));
                         ovTab = td < 0 ? "Tab: not learned yet" : td <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({td:0.0})" : $"Other tab? ({td:0.0} > {FarmCheck.TabMatchMax})";
                         ovTabColor = td >= 0 && td > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
