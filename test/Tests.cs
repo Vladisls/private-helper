@@ -4,14 +4,41 @@ static class T {
   static void Check(bool ok, string name){ Console.WriteLine((ok?"PASS ":"FAIL ")+name); if(!ok) fail++; }
   static TimeSpan S(double s)=>TimeSpan.FromSeconds(s);
   static bool FarrmSafe() => FarmCheck.TrailingCount("")==null && FarmCheck.TrailingCount("2 34")==34;
-  /// Black 8-connected components of a picture, and the same merged where they overlap in x (CountGlyphs' glyphs).
+  /// Dark (grey under 128) 8-connected components of a picture, and the same merged where they overlap in x (CountGlyphs' glyphs).
   static (int comps, int glyphs) BlackComponents(Img p){ var seen = new bool[p.W * p.H]; var st = new Stack<int>(); var spans = new List<(int l, int r)>();
-    for (int i = 0; i < seen.Length; i++) { if (seen[i] || p.Px[i*4] != 0) continue; int l = i % p.W, r = l; seen[i] = true; st.Push(i);
+    for (int i = 0; i < seen.Length; i++) { if (seen[i] || p.Px[i*4] >= 128) continue; int l = i % p.W, r = l; seen[i] = true; st.Push(i);
       while (st.Count > 0) { int k = st.Pop(), x = k % p.W, y = k / p.W; l = Math.Min(l, x); r = Math.Max(r, x);
-        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) { int nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= p.W || ny >= p.H) continue; int j = ny * p.W + nx; if (!seen[j] && p.Px[j*4] == 0) { seen[j] = true; st.Push(j); } } }
+        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) { int nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= p.W || ny >= p.H) continue; int j = ny * p.W + nx; if (!seen[j] && p.Px[j*4] < 128) { seen[j] = true; st.Push(j); } } }
       spans.Add((l, r)); }
     int glyphs = 0, right = -1; foreach (var sp in spans.OrderBy(q => q.l)) { if (sp.l > right) glyphs++; right = Math.Max(right, sp.r); }
     return (spans.Count, glyphs); }
+  /// Rows holding dark (under 128) pixels in a picture: the glyph height; and the smallest distance of a dark pixel to the edge.
+  static (int h, int margin) DarkRows(Img p){ int y0 = p.H, y1 = -1, m = int.MaxValue;
+    for (int y = 0; y < p.H; y++) for (int x = 0; x < p.W; x++) if (p.Px[(y * p.W + x) * 4] < 128) { y0 = Math.Min(y0, y); y1 = Math.Max(y1, y); m = Math.Min(m, Math.Min(Math.Min(x, p.W - 1 - x), Math.Min(y, p.H - 1 - y))); }
+    return (y1 < 0 ? 0 : y1 - y0 + 1, m); }
+  /// Grey levels used in a picture (a smooth enlargement has many, a pixel-repeated binary mask two).
+  static int GreyLevels(Img p){ var seen = new HashSet<byte>(); for (int i = 0; i < p.W * p.H; i++) seen.Add(p.Px[i * 4]); return seen.Count; }
+  /// Bicubic resampling (Keys, a = -0.5) with the kernel widened by the shrink factor (a low-pass filter, like an
+  /// image editor's bicubic): simulates the game drawn at a smaller UI scale.
+  static Img ResizeBicubic(Img src, double f){
+    int W = (int)Math.Round(src.W * f), H = (int)Math.Round(src.H * f);
+    double K(double t){ t = Math.Abs(t); return t <= 1 ? (1.5 * t - 2.5) * t * t + 1 : t < 2 ? ((-0.5 * t + 2.5) * t - 4) * t + 2 : 0; }
+    (int[] idx, double[] w, int taps) Wt(int n, int m){ double sc = (double)n / m, ks = Math.Max(1, sc); int taps = (int)Math.Ceiling(4 * ks) + 1; var idx = new int[m * taps]; var w = new double[m * taps];
+      for (int x = 0; x < m; x++) { double u = (x + 0.5) * sc - 0.5; int i0 = (int)Math.Floor(u - 2 * ks) + 1; double sum = 0;
+        for (int t = 0; t < taps; t++) { double ww = K((i0 + t - u) / ks); idx[x * taps + t] = Math.Min(n - 1, Math.Max(0, i0 + t)); w[x * taps + t] = ww; sum += ww; }
+        for (int t = 0; t < taps; t++) w[x * taps + t] /= sum; }
+      return (idx, w, taps); }
+    var (hx, hw, ht) = Wt(src.W, W); var (vy, vw, vt) = Wt(src.H, H);
+    var tmp = new double[src.H * W * 3];
+    for (int y = 0; y < src.H; y++) for (int x = 0; x < W; x++) { double b = 0, g = 0, r = 0; for (int t = 0; t < ht; t++) { int si = (y * src.W + hx[x * ht + t]) * 4; double ww = hw[x * ht + t]; b += ww * src.Px[si]; g += ww * src.Px[si + 1]; r += ww * src.Px[si + 2]; } int o = (y * W + x) * 3; tmp[o] = b; tmp[o + 1] = g; tmp[o + 2] = r; }
+    var px = new byte[W * H * 4]; byte C(double v) => v <= 0 ? (byte)0 : v >= 255 ? (byte)255 : (byte)Math.Round(v);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) { double b = 0, g = 0, r = 0; for (int t = 0; t < vt; t++) { int o = (vy[y * vt + t] * W + x) * 3; double ww = vw[y * vt + t]; b += ww * tmp[o]; g += ww * tmp[o + 1]; r += ww * tmp[o + 2]; } int d = (y * W + x) * 4; px[d] = C(b); px[d + 1] = C(g); px[d + 2] = C(r); px[d + 3] = 255; }
+    return new Img(W, H, px); }
+#if DEBUG
+  const bool DebugBuild = true;
+#else
+  const bool DebugBuild = false;
+#endif
   static int Main(){
     var p = new List<string>();
     var s = Settings.Parse("", p);
@@ -335,7 +362,7 @@ static class T {
         var snap = FarmCheck.FindGrid(cim, box.Item1, box.Item2, box.Item3, box.Item4);
         var wrongSnap = snap; wrongSnap.X += 9; wrongSnap.Y -= 11;               // a wrong snap, like the twitching one
         var anchored = FarmCheck.AnchorByButtons(cim, wrongSnap, out bool okA, out string infoA);
-        var swB = System.Diagnostics.Stopwatch.StartNew(); var byBtn = FarmCheck.LocateByButton(cim, 1.0, out double dBtn); long msBtn = swB.ElapsedMilliseconds;
+        var swB = System.Diagnostics.Stopwatch.StartNew(); var byBtn = FarmCheck.LocateByButton(cim, out double dBtn, out double sBtn); long msBtn = swB.ElapsedMilliseconds;
         Console.WriteLine($"ANCHOR {nm}: snap {snap.X:0},{snap.Y:0}; from a wrong snap -> {infoA}; whole-image locate by button -> {(byBtn.HasValue ? $"{byBtn.Value.X:0},{byBtn.Value.Y:0}" : "none")} (diff {dBtn:0.0}, {msBtn} ms)");
         if (expect10 != null) {
           var read = FarmCheck.ReadInventory(cim, anchored, FarmCheck.DefaultIcons()).OrderBy(x => x.Row * 8 + x.Col).ToList();
@@ -356,7 +383,7 @@ static class T {
       var fq = System.IO.Path.Combine(dataDir, "q.bin");
       if (System.IO.File.Exists(fq)) {
         var q = Load(fq);
-        var gq = FarmCheck.LocateByButton(q, 1.0, out double qd);
+        var gq = FarmCheck.LocateByButton(q, out double qd, out double qs);
         Console.WriteLine($"Q locate by button: {(gq.HasValue ? $"{gq.Value.X:0},{gq.Value.Y:0}" : "none")} diff {qd:0.0}");
         if (gq.HasValue) {
           var rq = FarmCheck.ReadInventory(q, gq.Value, FarmCheck.DefaultIcons()).OrderBy(x => x.Row * 8 + x.Col).ToList();
@@ -365,8 +392,8 @@ static class T {
           int okQ = 0; var infoQ = new List<string>();
           foreach (var (nmq, digitsQ) in new[]{ ("Upgrade Core (Low)", 1), ("Upgrade Core (High)", 3) }) {
             var sl = rq.FirstOrDefault(x => x.Item == nmq); if (sl == null) { infoQ.Add(nmq + ": not found"); continue; }
-            var br = FarmCheck.DigitBand(gq.Value, sl.Row, sl.Col); var bi = Crop(q, br.X, br.Y, br.Width, br.Height);
-            var glyphs = FarmCheck.CountGlyphs(bi, gq.Value.Scale); var reg = FarmCheck.CountRegion(bi, gq.Value.Scale);
+            var br = FarmCheck.FindCountBand(q, gq.Value, sl.Row, sl.Col, out var glyphs);
+            var reg = br.HasValue ? FarmCheck.CountRegion(glyphs, br.Value.Width, br.Value.Height) : null;
             bool ok = glyphs.Count > 0 && reg.HasValue && reg.Value.X <= glyphs[glyphs.Count - 1].Right - digitsQ * 11 * gq.Value.Scale && reg.Value.X <= glyphs[0].X && reg.Value.Right >= glyphs[glyphs.Count - 1].Right && reg.Value.Y <= glyphs.Min(r => r.Y) && reg.Value.Bottom >= glyphs.Max(r => r.Bottom);
             if (ok) okQ++;
             infoQ.Add($"{nmq}: {glyphs.Count} glyphs " + string.Join(" ", glyphs.Select(r => $"[{r.X}-{r.Right - 1} y{r.Y}-{r.Bottom - 1}]")) + $", region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right} y{reg.Value.Y}-{reg.Value.Bottom}" : "none")}");
@@ -380,13 +407,13 @@ static class T {
         var lens = digits3.Split(',').Select(x => x.Length).ToList();
         int okR = 0, k3 = 0; var info = new List<string>();
         foreach (var sl in gr.slots.OrderBy(x => x.Row * 8 + x.Col)) {
-          var br = FarmCheck.DigitBand(gr.grid, sl.Row, sl.Col); var bi = Crop(im3, br.X, br.Y, br.Width, br.Height);
-          var reg = FarmCheck.CountRegion(bi, gr.grid.Scale); var glyphs = FarmCheck.CountGlyphs(bi, gr.grid.Scale);
+          var br = FarmCheck.FindCountBand(im3, gr.grid, sl.Row, sl.Col, out var glyphs);
+          var reg = br.HasValue ? FarmCheck.CountRegion(glyphs, br.Value.Width, br.Value.Height) : null;
           bool covers = reg.HasValue && glyphs.Count > 0 && reg.Value.X <= glyphs[0].X && reg.Value.Right >= glyphs[glyphs.Count - 1].Right
                         && reg.Value.Y <= glyphs.Min(r => r.Y) && reg.Value.Bottom >= glyphs.Max(r => r.Bottom)
                         && k3 < lens.Count && reg.Value.X <= glyphs[glyphs.Count - 1].Right - lens[k3] * 11 * gr.grid.Scale;   // wide enough for all digits of the known count
           if (covers) okR++; k3++;
-          info.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right}" : "none")} glyphs {(glyphs.Count > 0 ? $"{glyphs[0].X}-{glyphs[glyphs.Count-1].Right} ({glyphs.Count})" : "none")}");
+          info.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right} y{reg.Value.Y}-{reg.Value.Bottom}" : "none")} glyphs {(glyphs.Count > 0 ? $"{glyphs[0].X}-{glyphs[glyphs.Count-1].Right} y{glyphs.Min(q => q.Y)}-{glyphs.Max(q => q.Bottom)} ({glyphs.Count})" : "none")}{(covers ? "" : " MISSED")}");
         }
         Console.WriteLine($"REGION {nm3}: " + string.Join(" | ", info));
         Check(gr.slots.Count == 10 && okR == 10, $"{nm3}: the generic count region covers every count's glyph chain and all its digits ({okR}/10)");
@@ -428,7 +455,7 @@ static class T {
         { var gI = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons()).grid; capsD.Add(("inv", inv, gI, "3,208,144,14,9,5,34,158,16,2")); }
         { var mD = Load(fmis); var gM = FarmCheck.BestRead(mD, FarmCheck.FindGrid(mD, 815, 160, 620, 620), FarmCheck.DefaultIcons()).grid; capsD.Add(("mis", mD, gM, "3,223,172,14,9,5,34,158,16,2")); }
         var fqD = System.IO.Path.Combine(dataDir, "q.bin");
-        if (System.IO.File.Exists(fqD)) { var qD = Load(fqD); var gQ = FarmCheck.LocateByButton(qD, 1.0, out double _); if (gQ.HasValue) capsD.Add(("q", qD, gQ.Value, "3,262,209,14,9,5,34,158,16,2")); }
+        if (System.IO.File.Exists(fqD)) { var qD = Load(fqD); var gQ = FarmCheck.LocateByButton(qD, out double _, out double _); if (gQ.HasValue) capsD.Add(("q", qD, gQ.Value, "3,262,209,14,9,5,34,158,16,2")); }
         foreach (var (nmD, imD, gD, countsD) in capsD) {
           var cnt = countsD.Split(',');
           for (int k = 0; k < 10; k++) {
@@ -437,18 +464,18 @@ static class T {
             seenD++;
             if (reg == null) { badD.Add($"{nmD} {rD},{cD}: no region"); continue; }
             var pic = FarmCheck.DigitsIsolatedPicture(mask);
-            int black = 0; bool binary = true;
-            for (int q2 = 0; q2 < pic.W * pic.H; q2++) { int v = pic.Px[q2*4]; if (v == 0) black++; else if (v != 255) binary = false; }
+            int black = 0;
+            for (int q2 = 0; q2 < pic.W * pic.H; q2++) if (pic.Px[q2*4] < 128) black++;
             double frac = (double)black / (pic.W * pic.H);
-            var (comps, _) = BlackComponents(pic);
-            bool ok = pic.W == mask.W * 3 + 60 && pic.H == mask.H * 3 + 60 && mask.W == reg.W && mask.H == reg.H && binary && frac > 0 && frac < 0.30
-                      && comps == cnt[k].Length && nD == comps;
-            if (ok) okD++; else badD.Add($"{nmD} {rD},{cD} ({cnt[k]}): {comps} components, {nD} digits");
-            infoD.Add($"{nmD} {rD},{cD} {cnt[k]}: {comps}/{cnt[k].Length}");
+            var (comps, _) = BlackComponents(pic); var (gh, gm) = DarkRows(pic); int levels = GreyLevels(pic);
+            bool ok = mask.W == reg.W && mask.H == reg.H && frac > 0 && frac < 0.40 && comps == cnt[k].Length && nD == comps
+                      && Math.Abs(gh - FarmCheck.DigitsGlyphHeight) <= 4 && gm >= 0.2 * gh && levels >= 16;       // ~48 px glyphs, 25% margin, smooth
+            if (ok) okD++; else badD.Add($"{nmD} {rD},{cD} ({cnt[k]}): {comps} components, {nD} digits, glyphs {gh} px, margin {gm}, {levels} grey levels");
+            infoD.Add($"{nmD} {rD},{cD} {cnt[k]}: {comps}/{cnt[k].Length} h{gh}");
           }
         }
-        Console.WriteLine("DIGITS-ISOLATED (slot count: components/digits): " + string.Join(" | ", infoD));
-        Check(capsD.Count == 3 && seenD == 30 && okD == seenD, $"digits picture B holds exactly the count's digits, one black component each, on inv, mis and q ({okD}/{seenD})" + (badD.Count > 0 ? ": " + string.Join("; ", badD) : ""));
+        Console.WriteLine("DIGITS-ISOLATED (slot count: components/digits, glyph height): " + string.Join(" | ", infoD));
+        Check(capsD.Count == 3 && seenD == 30 && okD == seenD, $"digits picture B holds exactly the count's digits, one dark component each, smooth, glyphs ~48 px with a 25% margin, on inv, mis and q ({okD}/{seenD})" + (badD.Count > 0 ? ": " + string.Join("; ", badD) : ""));
         // the same count regions with the leading digit touching something: a bright bar joining it to the next digit
         // (a merged pair, split at the fixed advance), a solid white shine touching it, a dim tinted icon rim touching it
         int seenS = 0, okS = 0; var badS = new List<string>();
@@ -456,8 +483,9 @@ static class T {
           var cnt = countsD.Split(',');
           for (int k = 0; k < 10; k++) {
             if (cnt[k].Length < 2) continue;
-            var bandS = FarmCheck.CropImg(imD, FarmCheck.DigitBand(gD, k / 5, k % 5));
-            var chain = FarmCheck.CountGlyphs(bandS, gD.Scale); var region = FarmCheck.CountRegion(chain, bandS.W, bandS.H).Value;
+            var bandR = FarmCheck.FindCountBand(imD, gD, k / 5, k % 5, out var chain);
+            if (bandR == null) { badS.Add($"{nmD} {k / 5},{k % 5}: no count band"); continue; }
+            var bandS = FarmCheck.CropImg(imD, bandR.Value); var region = FarmCheck.CountRegion(chain, bandS.W, bandS.H).Value;
             FarmCheck.DigitsMask(bandS, chain, region, out var clean);
             if (clean.Count < 2) { badS.Add($"{nmD} {k / 5},{k % 5}: clean picture has {clean.Count} digits"); continue; }
             var d0 = clean[0]; var d1 = clean[1]; int hD = d0.Height, mid = d0.Y + hD / 2;
@@ -479,11 +507,74 @@ static class T {
         { var g9 = capsD[0].g; FarmCheck.CountRegionImage(inv, g9, 0, 4, out int n9, out Img m9);
           var rep = FarmCheck.RepeatedDigitPicture(m9); var one = FarmCheck.DigitsIsolatedPicture(m9);
           var (c9, _) = BlackComponents(rep); int bl1 = 0, bl3 = 0;
-          for (int q2 = 0; q2 < one.W * one.H; q2++) if (one.Px[q2*4] == 0) bl1++;
-          for (int q2 = 0; q2 < rep.W * rep.H; q2++) if (rep.Px[q2*4] == 0) bl3++;
-          Check(n9 == 1 && c9 == 3 && bl3 == 3 * bl1 && FarmCheck.RepeatedDigitPicture(new Img(2, 2, Enumerable.Repeat((byte)255, 16).ToArray())) == null,
+          for (int q2 = 0; q2 < one.W * one.H; q2++) if (one.Px[q2*4] < 128) bl1++;
+          for (int q2 = 0; q2 < rep.W * rep.H; q2++) if (rep.Px[q2*4] < 128) bl3++;
+          Check(n9 == 1 && c9 == 3 && Math.Abs(bl3 - 3 * bl1) <= 0.03 * bl3 && Math.Abs(DarkRows(rep).h - DarkRows(one).h) <= 1 && FarmCheck.RepeatedDigitPicture(new Img(2, 2, Enumerable.Repeat((byte)255, 16).ToArray())) == null,
                 $"repeated lone digit picture: the 9 three times ({c9} components, {bl3} = 3 x {bl1} black pixels), nothing for an empty mask"); }
       }
+      // ---- UI scale change: mis and q shrunk to 75% and 60% (bicubic), as if the game's UI size were set smaller ----
+      {
+        var table = new List<string>(); int casesS = 0, okLoc = 0, okAnc = 0, okRows = 0, okPics = 0; var badU = new List<string>();
+        foreach (var (nmU, fileU, countsU) in new[]{ ("mis", "mis.bin", "3,223,172,14,9,5,34,158,16,2"), ("q", "q.bin", "3,262,209,14,9,5,34,158,16,2") }) {
+          var fU = System.IO.Path.Combine(dataDir, fileU); if (!System.IO.File.Exists(fU)) continue;
+          var full = Load(fU); var g1 = FarmCheck.LocateByButton(full, out double _, out double s1);
+          if (g1 == null) { badU.Add(nmU + ": not located at full size"); continue; }
+          var cntU = countsU.Split(',');
+          foreach (var f in new[]{ 0.75, 0.6 }) {
+            casesS++;
+            var small = ResizeBicubic(full, f);
+            var swU = System.Diagnostics.Stopwatch.StartNew();
+            var gU = FarmCheck.LocateByButton(small, out double dU, out double sU); long msU = swU.ElapsedMilliseconds;
+            // located: scale within 5%, slot size RefPitch x scale, origin where the full-size grid lands after shrinking
+            bool loc = gU.HasValue && Math.Abs(sU / (s1 * f) - 1) <= 0.05 && Math.Abs(gU.Value.PitchX / (g1.Value.PitchX * f) - 1) <= 0.03
+                       && Math.Abs(gU.Value.X - g1.Value.X * f) <= Math.Max(2, 0.05 * gU.Value.PitchX) && Math.Abs(gU.Value.Y - g1.Value.Y * f) <= Math.Max(2, 0.05 * gU.Value.PitchX);
+            if (loc) okLoc++; else badU.Add($"{nmU} {f}: locate {(gU.HasValue ? $"{gU.Value.X:0.0},{gU.Value.Y:0.0} pitch {gU.Value.PitchX:0.00}" : "none")} scale {sU:0.000} (expected ~{g1.Value.X * f:0},{g1.Value.Y * f:0} pitch {g1.Value.PitchX * f:0.00})");
+            string rowInfo = "-", picInfo = "-"; int fullDigits = 0, goodPics = 0;
+            if (gU.HasValue) {
+              var gl = gU.Value;
+              // anchor from a wrong start: a snap offU by a sixth of a slot at the right scale, and the old full-size grid (stale scale)
+              var offU = gl; offU.X += gl.PitchX / 6; offU.Y -= gl.PitchY / 7;
+              var aU1 = FarmCheck.AnchorByButtons(small, offU, out FarmCheck.AnchorResult rU1, sU);
+              var stale = g1.Value;
+              var aU2 = FarmCheck.AnchorByButtons(small, stale, out FarmCheck.AnchorResult rU2, s1);
+              bool anc = rU1.Ok && Math.Abs(aU1.X - gl.X) <= 2 && Math.Abs(aU1.Y - gl.Y) <= 2
+                         && rU2.Ok && rU2.ScaleSearched && Math.Abs(aU2.X - gl.X) <= 2 && Math.Abs(aU2.Y - gl.Y) <= 2 && Math.Abs(rU2.Scale / sU - 1) <= 0.01 && Math.Abs(aU2.PitchX / gl.PitchX - 1) <= 0.01;
+              if (anc) okAnc++; else badU.Add($"{nmU} {f}: anchor from a wrong snap -> {rU1.Info}; from the full-size grid -> {rU2.Info}");
+              // count rows from the pixels: every digit whole (no glyph touching the search areaU's top/bottom), one component per digit
+              var rowsBad = new List<string>();
+              for (int k = 0; k < 10; k++) {
+                int rU = k / 5, cU = k % 5;
+                var areaU = FarmCheck.CountSearchArea(gl, rU, cU);
+                var bandU = FarmCheck.FindCountBand(small, gl, rU, cU, out var chainU);
+                var regU = FarmCheck.CountRegionImage(small, gl, rU, cU, out int nU, out Img maskU);
+                bool whole = bandU.HasValue && chainU.Count > 0 && chainU.All(b => bandU.Value.Y + b.Y > areaU.Y && bandU.Value.Y + b.Bottom < areaU.Bottom && b.Y >= 1 && b.Bottom <= bandU.Value.Height - 1);
+                bool digitsOk = whole && regU != null && maskU != null && nU == cntU[k].Length;
+                if (digitsOk) fullDigits++; else rowsBad.Add($"{rU},{cU} ({cntU[k]}): {(bandU.HasValue ? $"bandU y{bandU.Value.Y - areaU.Y}-{bandU.Value.Bottom - areaU.Y} of {areaU.Height}, {chainU.Count} glyphs, {nU} digits" : "no bandU")}");
+                if (!digitsOk) continue;
+                var picU = FarmCheck.DigitsIsolatedPicture(maskU);
+                var (compsU, _) = BlackComponents(picU); var (ghU, gmU) = DarkRows(picU);
+                if (compsU == cntU[k].Length && Math.Abs(ghU - FarmCheck.DigitsGlyphHeight) <= 4 && gmU >= 0.2 * ghU) goodPics++;
+                else rowsBad.Add($"{rU},{cU} ({cntU[k]}) picture B: {compsU} components, glyphs {ghU} px, margin {gmU}");
+              }
+              if (fullDigits == 10) okRows++;
+              if (goodPics == 10) okPics++;
+              if (rowsBad.Count > 0) badU.Add($"{nmU} {f}: " + string.Join("; ", rowsBad));
+              rowInfo = $"{fullDigits}/10"; picInfo = $"{goodPics}/10";
+            }
+            table.Add($"{nmU} x {f:0.00}: {(loc ? "located" : "NOT located")} (scale {sU:0.000}, slot {(gU.HasValue ? gU.Value.PitchX : 0):0.00} px, {msU} ms), slots with full digits {rowInfo}, B pictures ok {picInfo}");
+          }
+        }
+        foreach (var t in table) Console.WriteLine("UI-SCALE " + t);
+        foreach (var t in badU) Console.WriteLine("UI-SCALE problem: " + t);
+        Check(casesS == 4 && okLoc == casesS, "UI scale 60%/75%: the sword button finds the inventory, scale within 5%, slot size to match" + (badU.Count > 0 ? ": " + string.Join(" | ", badU) : ""));
+        Check(casesS == 4 && okAnc == casesS, "UI scale 60%/75%: the anchor pins the grid from a wrong snap and from the stale full-size grid (scale searched)");
+        Check(casesS == 4 && okRows == casesS, "UI scale 60%/75%: the count rows found from the pixels hold every count's digits whole (10/10 slots each)");
+        Check(casesS == 4 && okPics == casesS, "UI scale 60%/75%: picture B has ~48 px glyphs and one dark component per digit (10/10 slots each)");
+      }
+      // whole-screen multi-scale locate on the full 2560x1440 capture
+      { var swT = System.Diagnostics.Stopwatch.StartNew(); var gT = FarmCheck.LocateByButton(inv, out double dT, out double sT); long msT = swT.ElapsedMilliseconds;
+        Console.WriteLine($"INFO multi-scale locate by button ({FarmCheck.MinUiScale}-{FarmCheck.MaxUiScale}, {inv.W}x{inv.H}, {(DebugBuild ? "Debug build" : "Release build")}): {msT} ms -> {(gT.HasValue ? $"{gT.Value.X:0},{gT.Value.Y:0} scale {sT:0.000}" : "none")}");
+        Check(gT.HasValue && Math.Abs(sT - 1) < 0.01 && msT < 3000, $"multi-scale locate on the whole 2560x1440 screen: found at scale {sT:0.000} in {msT} ms (under 3 s even in a Debug build)"); }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
@@ -519,6 +610,8 @@ static class T {
           && Enumerable.Range(0, 5120).All(x => tiles.Any(t => x >= t.x && x < t.x + t.w)), $"OCR tiles cover two monitors in {tiles.Count} pieces of at most 2600 px");
     Check(FarmCheck.ParseSlotSize("76.90") == 76.9 && FarmCheck.ParseSlotSize(FarmCheck.FormatSlotSize(57.625)) == 57.63 && FarmCheck.ParseSlotSize("abc") == null
           && FarmCheck.ParseSlotSize("5") == null && FarmCheck.ParseSlotSize("") == null && FarmCheck.ParseSlotSize(null) == null, "slot=76.90 saved/parsed, nonsense ignored");
+    Check(FarmCheck.ParseSlotSize("38.40") == 38.4 && FarmCheck.ParseUiScale(FarmCheck.FormatUiScale(0.6123)) == 0.6123 && FarmCheck.ParseUiScale("abc") == null
+          && FarmCheck.ParseUiScale("0.2") == null && FarmCheck.ParseUiScale("3") == null && FarmCheck.ParseUiScale(null) == null, "scale=0.6123 saved/parsed, a 50% UI's 38.4 px slot is a valid size, nonsense ignored");
     var exp = new[]{ "UC High", "UC Low", "FC Low" };
     var start = new Dictionary<string,int>{ ["UC High"]=144, ["UC Low"]=9 };
     Check(string.Join(",", FarmCheck.MissingToConfirm(exp, start, null, new HashSet<string>()))=="FC Low", "start: ask about every core not found");

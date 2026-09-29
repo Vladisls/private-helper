@@ -56,6 +56,14 @@ namespace CAHelper
         // from the last on-screen search. Unknown = 0 = FindGrid tries every slot size.
         double? slotSize, foundPitch;
         double KnownPitch => slotSize ?? foundPitch ?? 0;
+        // The UI scale the sword button was last found at (1 = the 2560x1440 reference; the game's UI size option
+        // changes it). The anchor matches the button (and checks the close cross) at this scale; unknown = from the
+        // slot size. Saved as "scale=".
+        double? buttonScale;
+        double AnchorScale => buttonScale ?? (KnownPitch > 0 ? KnownPitch / FarmCheck.RefPitch : 0);
+        // The inventory went missing from its area (grid or anchor): one screen search right away, then only the
+        // 3 s schedule until it is read again.
+        bool locatedSinceMissing;
         string locatedBy = "saved area";                                        // how the inventory area was found: title text / band search / saved area
 
         // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
@@ -133,6 +141,7 @@ namespace CAHelper
                 else if (k == "rare") rareWords = v.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (k.StartsWith("icon:")) learnedIcons.Add((k.Substring(5), v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
                 else if (k == "slot") slotSize = FarmCheck.ParseSlotSize(v);
+                else if (k == "scale") buttonScale = FarmCheck.ParseUiScale(v);
                 else if (k == "coretab") coreTab = v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray();
             }
             if (learnedIcons.Count > 0) icons = learnedIcons;
@@ -145,6 +154,7 @@ namespace CAHelper
             if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.DefaultIcons()) && !icons.SequenceEqual(FarmCheck.Icons))
                 foreach (var (n, f) in icons) lines.Add("icon:" + n + "=" + string.Join(" ", f.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture))));
             if (slotSize != null) lines.Add("slot=" + FarmCheck.FormatSlotSize(slotSize.Value));
+            if (buttonScale != null) lines.Add("scale=" + FarmCheck.FormatUiScale(buttonScale.Value));
             if (coreTab != null) lines.Add("coretab=" + string.Join(" ", coreTab.Select(x => x.ToString("0.0", CultureInfo.InvariantCulture))));
             try { File.WriteAllLines(ConfigPath, lines); } catch { }
         }
@@ -177,7 +187,7 @@ namespace CAHelper
             if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons and core tab are forgotten. The farm log is kept.",
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
-            icons = FarmCheck.DefaultIcons(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
+            icons = FarmCheck.DefaultIcons(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; buttonScale = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
             slotIdentity.Clear(); lastKnownCounts.Clear();
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
             Debug("RESET: areas back to defaults, learned icons/core tab forgotten");
@@ -188,7 +198,7 @@ namespace CAHelper
         {
             var r = AreaPicker.Pick(msg);
             if (r == null) return;
-            area = r.Value; if (resetGrid) { grid = null; coreTab = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty; lastKnownCounts.Clear(); }
+            area = r.Value; if (resetGrid) { grid = null; coreTab = null; foundPitch = null; buttonScale = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty; lastKnownCounts.Clear(); }
             Debug($"area set: {r.Value.X},{r.Value.Y} {r.Value.Width}x{r.Value.Height}");
             SaveConfig(); Render();
         }
@@ -197,7 +207,7 @@ namespace CAHelper
         void StartSession()
         {
             Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
-            running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
+            running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; locatedSinceMissing = false; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
             confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear(); slotIdentity.Clear(); lastKnownCounts.Clear();
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
@@ -391,7 +401,7 @@ namespace CAHelper
             int top = invArea.Y - cap.Y;
             var g = FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch);
             if (!FarmCheck.InventoryOpen(img, g)) { why = $"inventory not visible (contrast {g.Score:0.00}, needs 1.70)"; return null; }
-            var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult res);
+            var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult res, AnchorScale);
             var (g2, slots) = res.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, 8, 8, new Dictionary<(int, int), string>(slotIdentity))) : FarmCheck.BestRead(img, g, icons);
             if (slots.Count == 0) { why = "no core slots recognised"; return null; }
             var list = new List<(string, Img, Img, int)>();
@@ -480,7 +490,7 @@ namespace CAHelper
                     if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots = new List<SlotRead>(); ovTab = null; }
                     else
                     {
-                        var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult pres);
+                        var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult pres, AnchorScale);
                         ovAnchorRes = pres; ovAnchorCap = InvCapture; ovAnchor = pres.Info; ovAnchorOk = pres.Ok;
                         var (g2, slots) = pres.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, 8, 8, slotIdentity)) : FarmCheck.BestRead(img, g, icons);
                         if (pres.Ok)
@@ -524,7 +534,8 @@ namespace CAHelper
         }
 
         /// Searches every monitor for the inventory (every 3 s at most, only while waiting for counts), so it
-        /// works after a reset, after moving the inventory window or at any resolution without setting the area.
+        /// works after a reset, after moving the inventory window or at any resolution or UI scale without setting
+        /// the area.
         void TryLocateInventory(DateTime now)
         {
             if (busyLocate || (now - lastLocate).TotalSeconds < 3) return;
@@ -532,10 +543,32 @@ namespace CAHelper
             _ = LocateInventoryAsync();
         }
 
+        /// The inventory isn't where its area says (no grid there, or the button anchor failed): search the screen
+        /// at once, the first time; after that (it wasn't found) only on TryLocateInventory's schedule.
+        void InventoryMissing(DateTime now, string why)
+        {
+            if (!locatedSinceMissing && !busyLocate)
+            {
+                locatedSinceMissing = true; lastLocate = now;
+                Debug($"{why}: searching the screen now", "missing-now");
+                _ = LocateInventoryAsync();
+            }
+            else if (baseline == null || finishing) TryLocateInventory(now);   // waiting for counts: keep looking
+        }
+
+        /// Sets the inventory area around a grid (screen pixels): the 8x8 slots plus 0.2 slot on every side.
+        void SetInventoryArea(Grid g)
+        {
+            int m = (int)Math.Round(g.PitchX * 0.2);
+            invArea = new Rectangle((int)g.X - m, (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
+        }
+
         bool busyLocate;
-        /// 1) the text reader looks for the "Inventory" title and the grid is searched just below it (slot size
-        /// from the title's text height); 2) if that finds nothing, the grid pattern is searched on the whole
-        /// picture (FarmCheck.LocateInventory). Coordinates are physical desktop pixels (may be negative).
+        /// 0) the sword button at any UI scale (FarmCheck.LocateByButton; off the UI thread); 1) the text reader looks
+        /// for the "Inventory" title and the grid is searched just below it (slot size from the title's text height);
+        /// 2) if that finds nothing, the grid pattern is searched on the whole picture (FarmCheck.LocateInventory).
+        /// Coordinates are physical desktop pixels (may be negative). A slot size more than 3% off the saved one is
+        /// logged as a UI scale change and saved at once.
         async Task<bool> LocateInventoryAsync()
         {
             if (busyLocate) return false;
@@ -544,17 +577,21 @@ namespace CAHelper
             {
                 var screen = PartyOcr.PhysicalVirtualScreen();                    // every monitor
                 Img img; List<List<OcrWord>> lines = null; string ocrError = null;
-                Grid? found = null; string how = null; var titleRect = Rectangle.Empty;
+                Grid? found = null; string how = null; var titleRect = Rectangle.Empty; double? foundScale = null;
                 using (var bmp = PartyOcr.Capture(screen))
                 {
                     img = PartyOcr.ToImg(bmp);
-                    // 0) the sword button under the inventory: unique, never animates, no text reading needed
-                    double btnScale = KnownPitch > 0 ? KnownPitch / FarmCheck.RefPitch : 1.0;
-                    var byButton = FarmCheck.LocateByButton(img, btnScale, out double btnDiff);
-                    if (byButton == null && Math.Abs(btnScale - 1.0) > 0.01) byButton = FarmCheck.LocateByButton(img, 1.0, out btnDiff);
-                    if (byButton != null) { found = byButton; how = "sword button"; Debug($"sword button found on screen (diff {btnDiff:0.0})"); }
+                    // 0) the sword button under the inventory, at any UI scale: unique, never animates, no text reading needed
+                    var shot = img; var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var (byButton, btnDiff, btnScale) = await Task.Run(() => { var gb = FarmCheck.LocateByButton(shot, out double d, out double sc); return (gb, d, sc); });
+                    if (byButton != null)
+                    {
+                        found = byButton; how = "sword button"; foundScale = btnScale;
+                        Debug($"sword button found on screen (diff {btnDiff:0.0}, UI scale {btnScale:0.000}, {sw.ElapsedMilliseconds} ms)");
+                    }
                     else
                     {
+                        Debug($"sword button not on screen (best diff {(btnDiff == double.MaxValue ? "-" : btnDiff.ToString("0.0", CultureInfo.InvariantCulture))}, {sw.ElapsedMilliseconds} ms)", "button-none");
                         try { lines = await PartyOcr.ReadWordsTiledAsync(bmp); }
                         catch (Exception ex) { ocrError = ex.Message; }
                     }
@@ -579,10 +616,17 @@ namespace CAHelper
                                  : titles.Count == 0 ? "no \"Inventory\" title read"
                                  : $"{titles.Count} \"Inventory\" title(s) at " + string.Join(" ", titles.Select(t => $"{screen.X + t.X:0},{screen.Y + t.Y:0} h{t.H:0}")) + (how == "title text" ? "" : " but no grid below");
                 if (found == null) { Debug($"searched all screens ({screen.X},{screen.Y} {screen.Width}x{screen.Height}): {titleInfo}; no inventory grid visible", "locate-none"); return false; }
-                var g = found.Value; int m = (int)Math.Round(g.PitchX * 0.2);
-                invArea = new Rectangle(screen.X + (int)g.X - m, screen.Y + (int)g.Y - m, (int)Math.Round(8 * g.PitchX) + 2 * m, (int)Math.Round(8 * g.PitchY) + 2 * m);
+                var g = found.Value;
+                double oldPitch = KnownPitch;
+                SetInventoryArea(new Grid { X = screen.X + g.X, Y = screen.Y + g.Y, PitchX = g.PitchX, PitchY = g.PitchY });
                 foundPitch = g.PitchX; locatedBy = how; ovTitle = titleRect;
-                grid = null; lastInvRead = DateTime.MinValue; lastKnownCounts.Clear(); SaveConfig();
+                buttonScale = foundScale;                                            // unknown when found another way: from the slot size
+                if (oldPitch > 0 && Math.Abs(g.PitchX / oldPitch - 1) > 0.03)
+                {
+                    Debug($"UI scale changed: slot {oldPitch:0.0} px -> {g.PitchX:0.0} px");
+                    slotSize = g.PitchX; slotIdentity.Clear();
+                }
+                grid = null; readGrid = null; lastInvRead = DateTime.MinValue; lastKnownCounts.Clear(); SaveConfig();
                 Debug($"found the inventory by {how}: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}, slot {g.PitchX:0.0} px ({titleInfo})");
                 return true;
             }
@@ -608,10 +652,11 @@ namespace CAHelper
 
         void CheckInventory(DateTime now)
         {
-            using (var bmp = PartyOcr.Capture(InvCapture))
+            var cap = InvCapture;
+            using (var bmp = PartyOcr.Capture(cap))
             {
                 var img = PartyOcr.ToImg(bmp);
-                int top = invArea.Y - InvCapture.Y;
+                int top = invArea.Y - cap.Y;
                 // The cached grid can be stale (inventory moved) or wrong: search again before calling it closed.
                 bool hadGrid = grid != null;
                 var cur = FarmCheck.CurrentGrid(img, grid, () => FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch), out bool replaced);
@@ -621,7 +666,7 @@ namespace CAHelper
                     Debug(hadGrid ? $"inventory closed (or moved): not found again in its area ({locatedBy})" : $"inventory not open in its area ({locatedBy}; no grid with contrast 1.70)", "closed");
                     ovInv = hadGrid ? "closed" : "not visible (no grid with contrast 1.70)"; ovGrid = null; ovSlots = new List<SlotRead>(); ovTab = null;
                     waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
-                    if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
+                    InventoryMissing(now, "inventory not in its area");                 // moved, or another UI scale: search now
                     return;
                 }
                 if (replaced)
@@ -634,10 +679,27 @@ namespace CAHelper
                 lastInvRead = now;
                 // Another inventory tab open? Compare the tab strip with the core tab's.
                 double tabDist = coreTab == null ? 0 : FarmCheck.Dist(coreTab, FarmCheck.TabPrint(img, grid.Value));
-                var anchored = FarmCheck.AnchorByButtons(img, grid.Value, out FarmCheck.AnchorResult ares);
+                var anchored = FarmCheck.AnchorByButtons(img, grid.Value, out FarmCheck.AnchorResult ares, AnchorScale);
                 bool anchorOk = ares.Ok; string anchorInfo = ares.Info;
                 if (anchorInfo != lastAnchorInfo) { Debug("anchor: " + anchorInfo, "anchor"); lastAnchorInfo = anchorInfo; }
-                ovAnchor = anchorInfo; ovAnchorOk = anchorOk; ovAnchorRes = ares; ovAnchorCap = InvCapture;
+                ovAnchor = anchorInfo; ovAnchorOk = anchorOk; ovAnchorRes = ares; ovAnchorCap = cap;
+                if (anchorOk && ares.ScaleSearched)
+                {
+                    // the button wasn't at the known scale: the UI size changed. New slot size and area at once; the
+                    // next check reads the inventory there.
+                    double oldPitch = KnownPitch > 0 ? KnownPitch : grid.Value.PitchX, newPitch = FarmCheck.RefPitch * ares.Scale;
+                    buttonScale = ares.Scale;
+                    if (Math.Abs(newPitch / oldPitch - 1) > 0.03)
+                    {
+                        Debug($"UI scale changed: slot {oldPitch:0.0} px -> {newPitch:0.0} px");
+                        SetInventoryArea(new Grid { X = cap.X + anchored.X, Y = cap.Y + anchored.Y, PitchX = newPitch, PitchY = newPitch });
+                        slotSize = newPitch; foundPitch = newPitch; locatedBy = "sword button";
+                        grid = null; readGrid = null; lastKnownCounts.Clear(); slotIdentity.Clear(); invOpenSince = DateTime.MinValue; SaveConfig();
+                        return;
+                    }
+                    SaveConfig();
+                }
+                if (!anchorOk) InventoryMissing(now, "button anchor not found in the inventory area");
                 var (g, slots) = anchorOk
                     ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, 8, 8, slotIdentity))   // pinned: no position search, sticky identities
                     : FarmCheck.BestRead(img, grid.Value, icons, keep: readGrid);
@@ -649,7 +711,7 @@ namespace CAHelper
                 FarmCheck.ForgetMissingCounts(slots, lastKnownCounts);                  // empty / other item: its last count no longer applies
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
-                ovInvCap = InvCapture; ovGrid = g; ovInv = $"open, {found} core types";
+                ovInvCap = cap; ovGrid = g; ovInv = $"open, {found} core types";
                 ovTab = coreTab == null ? "Tab: learning from this read" : tabDist <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({tabDist:0.0})" : $"Other tab? ({tabDist:0.0})";
                 ovTabColor = tabDist > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
                 if (tabDist > FarmCheck.TabMatchMax)
@@ -681,6 +743,7 @@ namespace CAHelper
                     return;
                 }
                 waitReason = null;
+                if (anchorOk) locatedSinceMissing = false;                             // found where it should be: search at once next time
                 if (slotSize == null || Math.Abs(slotSize.Value - g.PitchX) > 0.5) { slotSize = g.PitchX; SaveConfig(); Debug($"slot size {g.PitchX:0.0} px saved (read recognised {found} core types)"); }
                 if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
                 Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col} ({x.GlyphCount} glyphs, icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.GlyphCount)));

@@ -241,7 +241,7 @@ namespace CAHelper
 
         /// Reads each slot's count region. With the OCR package installed (TessOcr.Available) Tesseract reads it in
         /// digits-only mode: first the digits-isolated picture B (FarmCheck.DigitsMask: the count's digits and nothing
-        /// else, black on white) in the page modes of ReadDigitsPictureAsync, and only when B gives nothing the raw
+        /// else, dark on white, smoothly enlarged to ~48 px glyphs) in the page modes of ReadDigitsPictureAsync, and only when B gives nothing the raw
         /// picture A; FarmCheck.DecideTesseract picks the count (A is never trusted over B); a read under 40% doesn't
         /// count. Without the package, Windows' text reader reads it as before: its lines-of-text engine often returns
         /// nothing for a lone digit, so each region is shown in the treatments of FarmCheck.MakeCountVariants (in
@@ -477,7 +477,7 @@ namespace CAHelper
         }
 
         /// OCR input experiment: every count region in every treatment of FarmCheck.MakeCountVariants read by Windows'
-        /// text reader, plus the two Tesseract inputs (raw 3x, digits-isolated 3x, both PSM 7) read by Tesseract, and a
+        /// text reader, plus the two Tesseract inputs (raw 3x, digits-isolated 48 px, both PSM 7) read by Tesseract, and a
         /// last column with the digits picture's retries (PSM 8 / PSM 13, the repeated lone digit) and the count B
         /// ends up with. Saves a sheet: one row per slot, one column per treatment; each cell shows the picture
         /// (Windows' words boxed in red), the parsed count ("?" in orange) and the raw text (Tesseract: mode, text and
@@ -505,7 +505,7 @@ namespace CAHelper
                         catch (Exception ex) { words = new List<OcrWord>(); raw = "error: " + ex.GetType().Name + ": " + ex.Message; got = null; }
                         cells.Add((v.picture, words, raw, got));
                     }
-                    // Tesseract columns: raw 3x (PSM 7; always read here), digits-isolated 3x (PSM 7), and the digits
+                    // Tesseract columns: raw 3x (PSM 7; always read here), digits-isolated 48 px (PSM 7), and the digits
                     // picture's retries (PSM 8 / 13 when PSM 7 gave nothing or under 40%, the lone digit three times):
                     // that column's count is B's final one (FarmCheck.PickTesseractB), with the mode it came from
                     var aPic = FarmCheck.RawCountPicture(region);

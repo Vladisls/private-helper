@@ -153,14 +153,19 @@ FARM TRACKER
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
 - Stack counts are read by Tesseract in digits-only mode (the OCR package, see above); Windows'
-  text reader is the fallback when the package is missing. Both work on a generic count region:
-  the region is found from the size and position of the digit glyphs only (anchored on the last
-  digit, which never touches the icon). No digit or font shapes are stored or matched, so a font
-  change or another resolution doesn't matter. A slot with no count drawn at all is a single item (1).
+  text reader is the fallback when the package is missing. Both work on a generic count region
+  found from the pixels: the count's rows are searched in the slot's whole lower half (outlined
+  white glyphs of digit size, the rightmost chain of them), not taken from fixed rows, so the count
+  is found wherever the game draws it at your UI size; the region is anchored on the last digit
+  (it never touches the icon). No digit or font shapes are stored or matched, so a font change,
+  another resolution or UI scale doesn't matter. A slot with no count drawn at all is a single item (1).
 - Tesseract reads two pictures per slot, always both:
-  * B "digits-isolated 3x": only the pixels of the count's own glyphs (the right-aligned chain of
-    digit-sized outlined white shapes), black on white, enlarged 3x with a white margin; no icon
-    pixel at all. A first digit that touches the icon isn't in the chain, so "208" can come out as "08".
+  * B "digits-isolated": only the pixels of the count's own glyphs (the right-aligned chain of
+    digit-sized outlined white shapes) in their own grey levels (anti-aliasing kept), dark on white,
+    everything else white; enlarged smoothly (bicubic) so the digits are about 48 px tall (2x-8x,
+    from the measured digit height), with a white margin of a quarter of that. No blocky pixel
+    repetition, so small digits at a small UI scale stay readable. Small, soft digits are cut out at
+    a lower brightness level than big crisp ones (the level is picked per count so every digit stays whole).
   * A "raw 3x": the raw region enlarged 3x with a dark margin; the count is the trailing run of
     digits (icon remains read as digits sit on the left and are dropped).
   A read counts with 1-5 digits and a mean confidence of at least 40%. Only one reads: that one
@@ -182,16 +187,23 @@ FARM TRACKER
 - Save image (screen + debug lines) saves, next to the exe (last 5 of each): the screen with the
   debug drawings (cabal-helper-farm-view-N.png), the last count read (-digits.png) and an OCR test
   sheet (-ocr-test.png): the core tab is read again with every slot in Windows' 5 treatments plus
-  Tesseract's 2 pictures ("tesseract raw 3x", "tesseract digits-isolated 3x"); one row per slot, one
+  Tesseract's 2 pictures ("tesseract raw 3x", "tesseract digits-isolated 48px"); one row per slot, one
   column per treatment, each cell the picture the reader got (Windows' words boxed in red), the count
   it gave ("?" in orange) and its raw text (Tesseract: text and confidence), and a "read N/10" summary
   per treatment (also in the diagnostics log). The files are saved independently: one failing doesn't
   stop the others.
 - The grid is pinned to two fixed parts of the inventory window that never animate: the sword
   button under the slots (the grid is a fixed offset above it) and the close cross at the top
-  right (their distance checks the scale). No twitching between reads.
-- The inventory doesn't have to be where the area says: while waiting for core counts the
-  tracker looks at all monitors every 3 s. It first looks for the sword button; failing that it
+  right (their distance checks the scale, matched at the same scale). No twitching between reads.
+- The UI scale (the game's UI size option) is detected automatically: the sword button is searched
+  at every scale from 50% to 160% (coarse to fine, a fraction of a second on a 2560x1440 screen),
+  the close cross pins the exact scale, the slot size follows from it and the grid there must pass
+  the contrast check. The scale is saved (scale=... in cabal-helper-farm.txt) and the anchor matches
+  at it. If the button isn't at the saved scale, it is searched at every scale; a different scale is
+  logged ("UI scale changed: slot X px -> Y px") and the slot size and area are updated at once.
+- The inventory doesn't have to be where the area says: when it isn't there (no grid, or the
+  button anchor fails) the tracker searches all monitors right away, once; after that, while
+  waiting for core counts, every 3 s. It first looks for the sword button; failing that it
   reads the screen text for the window title "Inventory" and searches the slot grid just below
   it; failing that it searches the grid pattern on the whole picture. The area moves to the
   inventory it finds. Nothing is guessed from the desktop resolution, so the game can run at

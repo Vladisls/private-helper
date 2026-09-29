@@ -116,6 +116,8 @@ namespace CAHelper
         /// Builds a brightness profile along each axis once, then searches every slot size and start for the
         /// pattern "bright border line, darker slot interior" repeated for all slots.
         public const double MinPitch = 48, MaxPitch = 130;     // 1080p (~58 px slots) up to 4K (~115 px)
+        /// The smallest slot size used when it is known (saved, or from the button at a small UI scale).
+        public const double SmallestPitch = RefPitch * MinUiScale * 0.9;
         public const double DefaultTolerance = 0.08;
 
         /// expectedPitch = 0: search every plausible slot size (no guess from the screen resolution).
@@ -123,7 +125,7 @@ namespace CAHelper
         /// within ±tolerance of it (0.08 = ±8%).
         public static Grid FindGrid(Img img, int bx, int by, int bw, int bh, int cols = 8, int rows = 8, double expectedPitch = 0, double tolerance = DefaultTolerance)
         {
-            double pMin = expectedPitch > 0 ? Math.Max(MinPitch * 0.8, expectedPitch * (1 - tolerance)) : MinPitch;
+            double pMin = expectedPitch > 0 ? Math.Max(SmallestPitch, expectedPitch * (1 - tolerance)) : MinPitch;
             double pMax = expectedPitch > 0 ? Math.Min(MaxPitch * 1.2, expectedPitch * (1 + tolerance)) : MaxPitch;
             // Pitch step small enough that the last of n slot borders drifts at most ~0.5 px from a real border
             // (a 0.5 px step drifted up to 2 px over 8 slots and missed the 1-2 px border lines on a whole screen).
@@ -367,8 +369,14 @@ namespace CAHelper
 
         /// Slot size saved in cabal-helper-farm.txt ("slot=76.9"). null when missing or not a plausible size.
         public static double? ParseSlotSize(string v) =>
-            double.TryParse((v ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double p) && p >= MinPitch * 0.8 && p <= MaxPitch * 1.2 ? p : (double?)null;
+            double.TryParse((v ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double p) && p >= SmallestPitch && p <= MaxPitch * 1.2 ? p : (double?)null;
         public static string FormatSlotSize(double p) => p.ToString("0.00", CultureInfo.InvariantCulture);
+
+        /// UI scale saved in cabal-helper-farm.txt ("scale=0.620", where the sword button was last found). null when
+        /// missing or outside MinUiScale..MaxUiScale (with 10% slack).
+        public static double? ParseUiScale(string v) =>
+            double.TryParse((v ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double s) && s >= MinUiScale * 0.9 && s <= MaxUiScale * 1.1 ? s : (double?)null;
+        public static string FormatUiScale(double s) => s.ToString("0.0000", CultureInfo.InvariantCulture);
 
         /// Brightness on border lines vs just inside the slots. Inventory open ~2.2, anything else ~1.3.
         public static double BorderContrast(Img img, Grid g, int cols = 8, int rows = 8)
@@ -443,42 +451,53 @@ namespace CAHelper
 
         /// The count's digit glyphs in a slot's digit band: outlined white shapes of digit height, chained from the
         /// right edge leftwards (counts are right-aligned). Icon remains are farther left or the wrong height.
+        /// (A band crop: pixels outside it count as dark. FindCountBand searches the whole lower slot instead.)
         public static List<Rectangle> LastComponents = new List<Rectangle>();
         public static List<Rectangle> CountGlyphs(Img band, double scale)
         {
             int W = band.W, H = band.H;
             var m = new bool[W * H];
             for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) m[y * W + x] = DigitPx(band, x, y);
-            // connected components (8-neighbour)
-            var lab = new int[W * H]; var boxes = new List<Rectangle>(); int n = 0;
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    if (!m[y * W + x] || lab[y * W + x] != 0) continue;
-                    n++; int minX = x, maxX = x, minY = y, maxY = y;
-                    var st = new Stack<(int, int)>(); st.Push((x, y)); lab[y * W + x] = n;
-                    while (st.Count > 0)
-                    {
-                        var (px, py) = st.Pop();
-                        minX = Math.Min(minX, px); maxX = Math.Max(maxX, px); minY = Math.Min(minY, py); maxY = Math.Max(maxY, py);
-                        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-                        {
-                            int nx = px + dx, ny = py + dy;
-                            if (nx < 0 || ny < 0 || nx >= W || ny >= H || !m[ny * W + nx] || lab[ny * W + nx] != 0) continue;
-                            lab[ny * W + nx] = n; st.Push((nx, ny));
-                        }
-                    }
-                    boxes.Add(Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1));
-                }
-            // merge pieces that overlap in x (a digit can break into two)
-            boxes = boxes.OrderBy(b => b.X).ToList();
-            var merged = new List<Rectangle>();
-            foreach (var b in boxes)
-            {
-                if (merged.Count > 0 && b.X <= merged[merged.Count - 1].Right) merged[merged.Count - 1] = Rectangle.Union(merged[merged.Count - 1], b);
-                else merged.Add(b);
-            }
+            return GlyphChain(m, W, H, scale, false);
+        }
+
+        /// Components of a digit-pixel mask, merged where a digit broke into pieces, and the count's chain among them:
+        /// digit-sized (height 0.7-1.35 x 16 px x scale, width up to 1.3 x 11 px x scale), from the rightmost one
+        /// leftwards while the gap stays under 0.7 digit widths, on the same baseline, at most 5.
+        /// wholeSlot = the mask covers the icon's lower part too: pieces are merged only when they overlap in x AND
+        /// sit on top of each other (the merge stays digit-sized), and a digit-sized piece off the baseline (icon) is
+        /// skipped instead of ending the chain. Otherwise (a band of digit rows) every x overlap is merged.
+        static List<Rectangle> GlyphChain(bool[] m, int W, int H, double scale, bool wholeSlot)
+        {
             double digitH = 16 * scale, digitW = 11 * scale;
+            var boxes = Components(m, W, H).Select(c => c.box).OrderBy(b => b.X).ToList();
+            var merged = new List<Rectangle>();
+            if (!wholeSlot)
+            {
+                // merge pieces that overlap in x (a digit can break into two)
+                foreach (var b in boxes)
+                {
+                    if (merged.Count > 0 && b.X <= merged[merged.Count - 1].Right) merged[merged.Count - 1] = Rectangle.Union(merged[merged.Count - 1], b);
+                    else merged.Add(b);
+                }
+            }
+            else
+            {
+                merged.AddRange(boxes);
+                for (bool again = true; again;)
+                {
+                    again = false;
+                    for (int i = 0; i < merged.Count && !again; i++)
+                        for (int j = i + 1; j < merged.Count && !again; j++)
+                        {
+                            Rectangle a = merged[i], b = merged[j], u = Rectangle.Union(a, b);
+                            bool xOverlap = a.X < b.Right && b.X < a.Right;
+                            int gap = Math.Max(a.Y, b.Y) - Math.Min(a.Bottom, b.Bottom);
+                            if (!xOverlap || gap > 0.4 * digitH || u.Height > digitH * 1.35 || u.Width > digitW * 1.3) continue;
+                            merged[i] = u; merged.RemoveAt(j); again = true;
+                        }
+                }
+            }
             LastComponents = merged;
             var digitLike = merged.Where(b => b.Height >= digitH * 0.7 && b.Height <= digitH * 1.35 && b.Width <= digitW * 1.3).OrderByDescending(b => b.Right).ToList();
             var chain = new List<Rectangle>();
@@ -486,8 +505,10 @@ namespace CAHelper
             {
                 if (chain.Count == 0) { chain.Add(b); continue; }
                 var last = chain[chain.Count - 1];
+                bool offLine = Math.Abs(b.Bottom - last.Bottom) > digitH * 0.3;
+                if (wholeSlot && (offLine || b.Right > last.X + digitW * 0.3)) continue;   // icon above/beside the count
                 if (last.X - b.Right > digitW * 0.7) break;                         // gap: the count has ended
-                if (Math.Abs(b.Bottom - last.Bottom) > digitH * 0.3) break;         // not on the same baseline
+                if (offLine) break;                                                 // not on the same baseline
                 chain.Add(b);
                 if (chain.Count == 5) break;
             }
@@ -495,12 +516,44 @@ namespace CAHelper
             return chain;
         }
 
-        /// The strip of a slot where its stack count is drawn (image coordinates), for the text reader.
+        /// The reference-scale guess of the strip where a slot's count is drawn (image coordinates): slot rows 47..63
+        /// at 2560x1440, scaled by the slot size. Only a guess: at other UI scales the game draws the count on other
+        /// rows, so the count reading uses FindCountBand (the rows found from the pixels).
         public static Rectangle DigitBand(Grid g, int r, int c)
         {
             var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;
             // digits are drawn at slot y 46..63 (2560x1440); the icon's frame ends at ~45, so start just below it
             return new Rectangle(sx + (int)Math.Round(14 * s), sy + (int)Math.Round(47 * s), (int)Math.Round(60 * s), (int)Math.Round(17 * s));
+        }
+
+        /// Where a slot's count can be (image coordinates): the slot's lower 55% (the count's rows depend on the UI
+        /// scale, so the icon's lower part is included), from a fifth into the slot to a little past its right edge
+        /// (counts are right-aligned; the same columns as DigitBand, plus room for 5 digits).
+        public static Rectangle CountSearchArea(Grid g, int r, int c)
+        {
+            double x0 = g.X + c * g.PitchX, y0 = g.Y + r * g.PitchY;
+            int left = (int)Math.Round(x0 + 0.2 * g.PitchX), right = (int)Math.Round(x0 + (22 + 60) / RefPitch * g.PitchX);
+            int top = (int)Math.Round(y0 + 0.45 * g.PitchY), bottom = (int)Math.Round(y0 + g.PitchY);
+            return Rectangle.FromLTRB(left, top, right, bottom);
+        }
+
+        /// The rows of a slot's count, found from the pixels: digit pixels (DigitPx: white with a dark outline) over
+        /// the whole CountSearchArea, their components, and the rightmost chain of digit-sized ones (GlyphChain). The
+        /// band is the chain's rows with 2 px above and below, across the search area's columns (image coordinates);
+        /// `chain` = the glyph boxes in band coordinates. null = no count glyphs in the slot.
+        public static Rectangle? FindCountBand(Img img, Grid g, int r, int c, out List<Rectangle> chain)
+        {
+            var area = Rectangle.Intersect(CountSearchArea(g, r, c), new Rectangle(0, 0, img.W, img.H));
+            chain = new List<Rectangle>();
+            if (area.Width <= 0 || area.Height <= 0) return null;
+            int W = area.Width, H = area.Height;
+            var m = new bool[W * H];
+            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) m[y * W + x] = DigitPx(img, area.X + x, area.Y + y);
+            var found = GlyphChain(m, W, H, g.Scale, true);
+            if (found.Count == 0) return null;
+            int top = Math.Max(0, found.Min(b => b.Top) - 2), bottom = Math.Min(H, found.Max(b => b.Bottom) + 2);
+            chain = found.Select(b => new Rectangle(b.X, b.Y - top, b.Width, b.Height)).ToList();
+            return new Rectangle(area.X, area.Y + top, W, bottom - top);
         }
 
         /// Maps text-reader words back to the digit bands they were cut from. Bands are stacked top to bottom in a
@@ -523,7 +576,8 @@ namespace CAHelper
 
         /// Where the count sits in a digit band, without any font knowledge: anchored on the rightmost digit-sized
         /// glyph (counts are right-aligned and the last digit never touches the icon) and extending left by up to
-        /// five digit widths, where a digit width is taken from the glyph's own height. null = no glyph at all.
+        /// five digit widths, where a digit width is taken from the glyph's own height; the rows of every glyph of the
+        /// chain with 2 px above and below. null = no glyph at all.
         public static Rectangle? CountRegion(Img band, double scale) => CountRegion(CountGlyphs(band, scale), band.W, band.H);
 
         /// CountRegion from an already found glyph chain (CountGlyphs) in a band of bandW x bandH.
@@ -533,19 +587,22 @@ namespace CAHelper
             var last = glyphs[glyphs.Count - 1];
             double digitW = Math.Max(6, last.Height * 0.7);
             int left = Math.Max(0, (int)Math.Round(last.Right - 5 * digitW));
-            int top = Math.Max(0, last.Y - 2), bottom = Math.Min(bandH, last.Bottom + 2);
+            int top = Math.Max(0, glyphs.Min(g => g.Y) - 2), bottom = Math.Min(bandH, glyphs.Max(g => g.Bottom) + 2);   // every glyph's rows
             return Rectangle.FromLTRB(left, top, Math.Min(bandW, last.Right + 2), bottom);
         }
 
-        /// The raw pixels of the count region of a slot (for the text reader), or null.
+        /// The raw pixels of the count region of a slot (for the text reader), or null. The count's rows come from the
+        /// pixels (FindCountBand), the region is anchored on its last glyph (CountRegion).
         public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount) => CountRegionImage(img, g, r, c, out glyphCount, out _);
 
-        /// Same, plus the count's digits alone (DigitsMask: black on white, the size of the region). glyphCount is
+        /// Same, plus the count's digits alone (DigitsMask: dark on white, the size of the region). glyphCount is
         /// then the number of digits in that picture. Both null when the slot has no count drawn.
         public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount, out Img digits)
         {
-            var band = CropImg(img, DigitBand(g, r, c));
-            var chain = CountGlyphs(band, g.Scale);
+            glyphCount = 0; digits = null;
+            var bandRect = FindCountBand(img, g, r, c, out var chain);
+            if (bandRect == null) return null;
+            var band = CropImg(img, bandRect.Value);
             glyphCount = chain.Count;
             var region = CountRegion(chain, band.W, band.H);
             if (region == null) { digits = null; return null; }
@@ -554,17 +611,20 @@ namespace CAHelper
             return CropImg(band, region.Value);
         }
 
-        /// The count's digits and nothing else, black on white, the size of `region` (band coordinates): Tesseract
-        /// input B. Generic, no stored shapes and no absolute pixel sizes; everything is measured on the count's last
+        /// The count's digits and nothing else, dark on white in grey levels, the size of `region` (band coordinates):
+        /// Tesseract input B (DigitsIsolatedPicture enlarges it). Generic, no stored shapes and no absolute pixel sizes; everything is measured on the count's last
         /// glyph (the rightmost of the chain, which never touches the icon): its height h, its stroke brightness and
         /// its stroke thickness.
         ///  (a) digit pixels: seeds at least 90% as bright as that glyph's strokes (the 90th percentile of its white
         ///      pixels' brightest channel) and nearly uncoloured (max-min under 10% of it), plus the pixels right next
         ///      to a seed that are at least 80% as bright and as uncoloured (thin anti-aliased strokes stay whole).
         ///      Digit strokes are pure white while icon rims are dimmer and tinted, so a digit that touches the icon
-        ///      comes apart from it here. Solid blobs (icon shine: a square about twice the stroke thickness fits in
-        ///      them, never in a stroke) are dropped with a pixel around them. Thin gaps across a stroke (up to 12% of
-        ///      h, e.g. a line drawn over the digits) are bridged.
+        ///      comes apart from it here. Solid blobs (icon shine: a square about twice the stroke thickness, and at
+        ///      least a third of h, fits in them, never in a stroke; found at that 90% level) are dropped with a pixel
+        ///      around them. Thin gaps across a stroke (up to 12% of h, e.g. a line drawn over the digits) are bridged.
+        ///      When a glyph of the chain isn't whole that way (its largest piece spans under 85% of its height:
+        ///      small, soft digits at small UI scales reach full brightness only in their stroke centres), the levels
+        ///      step down by 5% (85/75% ... 60/50%) until every glyph is whole (or most are).
         ///  (b) connected components (8-neighbour); specks (under 4% of the last glyph's pixels or under 0.4 h) dropped.
         ///  (c) chained from the right: a component is a digit when its height is 0.7-1.35 h and its bottom within
         ///      0.3 h of the last glyph's; the walk goes left while the gap stays under 0.7 digit widths (digit width
@@ -575,7 +635,11 @@ namespace CAHelper
         ///      Pixels of a digit above or below the last glyph's rows are then cut off (icon stuck on top).
         ///  (d) each digit's anti-aliased edge (light, uncoloured pixels between it and its dark outline, one pixel
         ///      deep, inside its own box and never touching another digit) is filled in.
-        /// `digits` = the digits' boxes (region coordinates), left to right: one black component each.
+        ///  (e) the picture keeps the screen's grey levels: 90% of the stroke brightness and more = black, 30% and less
+        ///      = white, linear in between (anti-aliasing kept); a digit's pixels are at least 87% dark, plus a
+        ///      one-pixel ring of its anti-aliased rim (at most mid grey, so the dark shapes are the mask's), and a stroke that steps diagonally gets grey corners (so it
+        ///      stays joined when the picture is enlarged smoothly). All else is white.
+        /// `digits` = the digits' boxes (region coordinates), left to right: one dark component each.
         public static Img DigitsMask(Img band, IList<Rectangle> chain, Rectangle region) => DigitsMask(band, chain, region, out _);
 
         public static Img DigitsMask(Img band, IList<Rectangle> chain, Rectangle region, out List<Rectangle> digits)
@@ -601,29 +665,45 @@ namespace CAHelper
             if (lv.Count == 0) return new Img(W, H, px);
             lv.Sort();
             double peak = lv[(int)Math.Round(0.9 * (lv.Count - 1))], maxSat = 0.1 * peak;
-            var m = new bool[W * H];
-            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) m[y * W + x] = Mx(x, y) >= 0.9 * peak && Sat(x, y) < maxSat;
-            var grow = new List<int>();
-            for (int j0 = 0; j0 < W * H; j0++)
+            bool[] Seeds(double t)
             {
-                if (!m[j0]) continue;
-                int x0 = j0 % W, y0 = j0 / W;
-                for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                var mm = new bool[W * H];
+                for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) mm[y * W + x] = Mx(x, y) >= t * peak && Sat(x, y) < maxSat;
+                var grow = new List<int>();
+                for (int j0 = 0; j0 < W * H; j0++)
                 {
-                    int x = x0 + dx, y = y0 + dy;
-                    if (x >= 0 && y >= 0 && x < W && y < H && !m[y * W + x] && Mx(x, y) >= 0.8 * peak && Sat(x, y) < maxSat) grow.Add(y * W + x);
+                    if (!mm[j0]) continue;
+                    int x0 = j0 % W, y0 = j0 / W;
+                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int x = x0 + dx, y = y0 + dy;
+                        if (x >= 0 && y >= 0 && x < W && y < H && !mm[y * W + x] && Mx(x, y) >= (t - 0.1) * peak && Sat(x, y) < maxSat) grow.Add(y * W + x);
+                    }
                 }
+                foreach (int j in grow) mm[j] = true;
+                return mm;
             }
-            foreach (int j in grow) m[j] = true;
+            // (each glyph's box cut to the last glyph's rows and a pixel more: an icon piece merged on top doesn't count)
+            var lineRows = Rectangle.FromLTRB(0, anchor.Top - 1, W, anchor.Bottom + 1);
+            var glyphBoxes = chain.Select(b => { var q = Rectangle.Intersect(b, region); q.Offset(-region.X, -region.Y); return Rectangle.Intersect(q, lineRows); }).Where(q => q.Width > 0 && q.Height > 0).ToList();
+            bool Whole(bool[] mm, Rectangle b)
+            {
+                var inBox = new bool[b.Width * b.Height];
+                for (int y = 0; y < b.Height; y++) for (int x = 0; x < b.Width; x++) inBox[y * b.Width + x] = mm[(b.Y + y) * W + b.X + x];
+                var parts = Components(inBox, b.Width, b.Height);
+                return parts.Count > 0 && parts.Max(c => c.box.Height) >= 0.85 * b.Height;
+            }
+            var strict = Seeds(0.9);
 
-            // stroke thickness of the last glyph (median horizontal run); solid blobs are dropped
+            // stroke thickness of the last glyph (median horizontal run, on the 0.9 level); solid blobs (found on the 0.9
+            // level too: icon shine is solid full white, a digit drawn at a lower level is not) are dropped
             var anchorPx = new List<int>();
-            for (int y = anchor.Top; y < anchor.Bottom; y++) for (int x = anchor.Left; x < anchor.Right; x++) if (m[y * W + x]) anchorPx.Add(y * W + x);
+            for (int y = anchor.Top; y < anchor.Bottom; y++) for (int x = anchor.Left; x < anchor.Right; x++) if (strict[y * W + x]) anchorPx.Add(y * W + x);
             double stroke = Math.Max(1, MedianRun(anchorPx, W));
-            int side = (int)Math.Ceiling(2 * stroke) + 1;
+            int side = Math.Max((int)Math.Ceiling(2 * stroke) + 1, (int)Math.Round(0.34 * h));   // small digits: strokes of 1 px, junctions of 3x3
             var sum = new int[(W + 1) * (H + 1)];
             for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
-                sum[(y + 1) * (W + 1) + x + 1] = (m[y * W + x] ? 1 : 0) + sum[y * (W + 1) + x + 1] + sum[(y + 1) * (W + 1) + x] - sum[y * (W + 1) + x];
+                sum[(y + 1) * (W + 1) + x + 1] = (strict[y * W + x] ? 1 : 0) + sum[y * (W + 1) + x + 1] + sum[(y + 1) * (W + 1) + x] - sum[y * (W + 1) + x];
             var blob = new bool[W * H];
             for (int y = 0; y + side <= H; y++) for (int x = 0; x + side <= W; x++)
             {
@@ -631,34 +711,50 @@ namespace CAHelper
                 if (n < side * side) continue;
                 for (int yy = Math.Max(0, y - 1); yy < Math.Min(H, y + side + 1); yy++) for (int xx = Math.Max(0, x - 1); xx < Math.Min(W, x + side + 1); xx++) blob[yy * W + xx] = true;
             }
-            for (int j = 0; j < W * H; j++) if (blob[j]) m[j] = false;
 
             // thin gaps across a stroke: bridged from the lowest pixel of a run to the next pixel below (straight or
             // one column aside) when nothing lies in between
             int gapMax = Math.Max(1, (int)Math.Round(0.12 * h));
-            var closed = (bool[])m.Clone();
-            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+            bool[] Bridge(bool[] mm)
             {
-                if (!m[y * W + x] || (y + 1 < H && m[(y + 1) * W + x])) continue;
-                for (int g = 2; g <= gapMax + 1 && y + g < H; g++)
+                var closed = (bool[])mm.Clone();
+                for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
                 {
-                    bool done = false;
-                    for (int dx = -1; dx <= 1 && !done; dx++)
+                    if (!mm[y * W + x] || (y + 1 < H && mm[(y + 1) * W + x])) continue;
+                    for (int g = 2; g <= gapMax + 1 && y + g < H; g++)
                     {
-                        int x2 = x + dx; if (x2 < 0 || x2 >= W || !m[(y + g) * W + x2]) continue;
-                        bool empty = true;
-                        for (int t = 1; t < g && empty; t++) for (int ex = Math.Min(x, x2); ex <= Math.Max(x, x2); ex++) if (m[(y + t) * W + ex]) { empty = false; break; }
-                        if (!empty) continue;
-                        for (int t = 1; t < g; t++) closed[(y + t) * W + x + (int)Math.Round(dx * (double)t / g)] = true;
-                        done = true;
+                        bool done = false;
+                        for (int dx = -1; dx <= 1 && !done; dx++)
+                        {
+                            int x2 = x + dx; if (x2 < 0 || x2 >= W || !mm[(y + g) * W + x2]) continue;
+                            bool empty = true;
+                            for (int t = 1; t < g && empty; t++) for (int ex = Math.Min(x, x2); ex <= Math.Max(x, x2); ex++) if (mm[(y + t) * W + ex]) { empty = false; break; }
+                            if (!empty) continue;
+                            for (int t = 1; t < g; t++) closed[(y + t) * W + x + (int)Math.Round(dx * (double)t / g)] = true;
+                            done = true;
+                        }
+                        if (done) break;
+                        bool sideways = false;                                                  // the stroke goes on beside: no gap
+                        for (int dx = -1; dx <= 1; dx++) { int x2 = x + dx; if (x2 >= 0 && x2 < W && mm[(y + g - 1) * W + x2]) sideways = true; }
+                        if (sideways) break;
                     }
-                    if (done) break;
-                    bool sideways = false;                                                  // the stroke goes on beside: no gap
-                    for (int dx = -1; dx <= 1; dx++) { int x2 = x + dx; if (x2 >= 0 && x2 < W && m[(y + g - 1) * W + x2]) sideways = true; }
-                    if (sideways) break;
                 }
+                return closed;
             }
-            m = closed;
+
+            // the digit level: the highest of 0.9, 0.85 ... 0.6 x peak at which every glyph of the chain is whole (its
+            // largest piece spans 85% of its height). Small, soft digits (small UI scales) reach the full stroke
+            // brightness only in their stroke centres, so at 0.9 their strokes break apart.
+            bool[] m = null; int bestWhole = -1;
+            for (int step = 0; step <= 6; step++)
+            {
+                var mm = step == 0 ? (bool[])strict.Clone() : Seeds(0.9 - 0.05 * step);
+                for (int j = 0; j < W * H; j++) if (blob[j]) mm[j] = false;
+                mm = Bridge(mm);
+                int whole = glyphBoxes.Count(b => Whole(mm, b));
+                if (whole > bestWhole) { bestWhole = whole; m = mm; }
+                if (whole == glyphBoxes.Count) break;
+            }
 
             // (b) components; specks dropped
             int anchorArea = 0;
@@ -742,7 +838,46 @@ namespace CAHelper
                 }
                 foreach (int k in add) owner[k] = i + 1;
             }
-            for (int j = 0; j < W * H; j++) if (owner[j] != 0) px[j * 4] = px[j * 4 + 1] = px[j * 4 + 2] = 0;
+            // the grey picture: dark digits on white, from the screen's own brightness (0.9 x peak and brighter = black,
+            // 0.3 x peak and darker = white, the anti-aliasing in between). A digit's own pixels are at least 87% dark,
+            // so the picture's shapes are the mask's; a one-pixel ring around each digit keeps its anti-aliased rim (at
+            // most mid grey; its dark outline turns white) where that doesn't touch another digit or a cut column. Everything else is white.
+            int Ink(int x, int y) { double t = (Mx(x, y) - 0.3 * peak) / (0.6 * peak); return t <= 0 ? 255 : t >= 1 ? 0 : (int)Math.Round(255 * (1 - t)); }
+            var val = new int[W * H];
+            for (int j = 0; j < W * H; j++) val[j] = owner[j] != 0 ? Math.Min(32, Ink(j % W, j / W)) : 255;
+            for (int i = 0; i < accepted.Count; i++)
+            {
+                var box = accepted[i].box; box.Inflate(1, 1);
+                for (int j = 0; j < W * H; j++)
+                {
+                    if (owner[j] != i + 1) continue;
+                    int x0 = j % W, y0 = j / W;
+                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int x = x0 + dx, y = y0 + dy, k = y * W + x;
+                        if (x < 0 || y < 0 || x >= W || y >= H || !box.Contains(x, y) || owner[k] != 0 || cut[k]) continue;
+                        bool nearOther = false;
+                        for (int ey = -1; ey <= 1 && !nearOther; ey++) for (int ex = -1; ex <= 1; ex++)
+                        {
+                            int xx = x + ex, yy = y + ey;
+                            if (xx >= 0 && yy >= 0 && xx < W && yy < H && owner[yy * W + xx] != 0 && owner[yy * W + xx] != i + 1) { nearOther = true; break; }
+                        }
+                        if (!nearOther) val[k] = Math.Min(val[k], Math.Max(128, Ink(x, y)));   // light: the shapes stay the mask's
+                    }
+                }
+            }
+            // a stroke that only steps diagonally (two pixels touching at a corner) gets grey in the two other corners,
+            // so the smooth enlargement keeps it joined
+            for (int y = 0; y + 1 < H; y++) for (int x = 0; x + 1 < W; x++)
+            {
+                int a = y * W + x, b = a + 1, c = a + W, d = c + 1;
+                foreach (var (p1, p2, o1, o2) in new[] { (a, d, b, c), (b, c, a, d) })
+                {
+                    if (owner[p1] == 0 || owner[p1] != owner[p2] || owner[o1] != 0 || owner[o2] != 0 || cut[o1] || cut[o2]) continue;
+                    val[o1] = Math.Min(val[o1], 110); val[o2] = Math.Min(val[o2], 110);
+                }
+            }
+            for (int j = 0; j < W * H; j++) px[j * 4] = px[j * 4 + 1] = px[j * 4 + 2] = (byte)val[j];
             digits = accepted.Select(a => a.box).OrderBy(b => b.X).ToList();
             return new Img(W, H, px);
         }
@@ -790,21 +925,55 @@ namespace CAHelper
             return list;
         }
 
-        /// Tesseract input B ("digits-isolated 3x"): a DigitsMask enlarged `f` times by pixel repetition (it stays pure
-        /// black and white, nothing is joined or split), with a white margin of 10 px * f.
-        public static Img DigitsIsolatedPicture(Img mask, int f = 3)
+        /// Glyph height Tesseract reads best: the digits picture is enlarged to about this (DigitsIsolatedPicture).
+        public const int DigitsGlyphHeight = 48;
+        public const double DigitsMinEnlarge = 2, DigitsMaxEnlarge = 8;
+
+        /// Tesseract input B ("digits-isolated"): a digits picture (DigitsMask: dark anti-aliased digits on white) cut
+        /// to its ink, enlarged with bicubic interpolation so its glyphs are ~DigitsGlyphHeight px tall (factor = 48 /
+        /// the measured glyph height, 2x..8x; smooth, no pixel blocks), with a white margin of 25% of the enlarged
+        /// glyph height. Glyph height = the rows holding dark (under 128) pixels. Dark specks of a pixel or two that
+        /// the interpolation leaves beside a stroke are lightened.
+        public static Img DigitsIsolatedPicture(Img mask)
         {
             if (mask == null || mask.W <= 0 || mask.H <= 0) throw new ArgumentException($"digits picture is empty ({mask?.W ?? 0}x{mask?.H ?? 0})");
-            if (f < 1) throw new ArgumentException("enlarge factor must be at least 1 (got " + f + ")");
-            int pad = 10 * f, W = mask.W * f + 2 * pad, H = mask.H * f + 2 * pad;
+            int x0 = mask.W, x1 = -1, y0 = mask.H, y1 = -1, d0 = mask.H, d1 = -1;
+            for (int y = 0; y < mask.H; y++) for (int x = 0; x < mask.W; x++)
+            {
+                int v = mask.Px[(y * mask.W + x) * 4];
+                if (v < 250) { x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y); }
+                if (v < 128) { d0 = Math.Min(d0, y); d1 = Math.Max(d1, y); }
+            }
+            if (x1 < 0) { x0 = 0; y0 = 0; x1 = mask.W - 1; y1 = mask.H - 1; }
+            double h = d1 >= d0 ? d1 - d0 + 1 : y1 - y0 + 1;
+            double f = Math.Max(DigitsMinEnlarge, Math.Min(DigitsMaxEnlarge, DigitsGlyphHeight / h));
+            // the ink with 2 px of white around it (so the interpolation sees white past the edges)
+            int cw = x1 - x0 + 5, chh = y1 - y0 + 5;
+            var cpx = new byte[cw * chh * 4];
+            for (int i = 0; i < cpx.Length; i++) cpx[i] = 255;
+            for (int y = y0; y <= y1; y++) Buffer.BlockCopy(mask.Px, (y * mask.W + x0) * 4, cpx, ((y - y0 + 2) * cw + 2) * 4, (x1 - x0 + 1) * 4);
+            var src = new Img(cw, chh, cpx);
+            var big = Resize(src, (int)Math.Round(cw * f), (int)Math.Round(chh * f));
+            // the interpolated edges make the dark rows a little taller than h x f (most at small h): measured, and
+            // enlarged once more with the factor corrected
+            int b0 = big.H, b1 = -1;
+            for (int y = 0; y < big.H; y++) for (int x = 0; x < big.W; x++) if (big.Px[(y * big.W + x) * 4] < 128) { b0 = Math.Min(b0, y); b1 = Math.Max(b1, y); break; }
+            if (b1 >= b0)
+            {
+                double f2 = Math.Max(DigitsMinEnlarge, Math.Min(DigitsMaxEnlarge, f * DigitsGlyphHeight / (b1 - b0 + 1)));
+                if (Math.Abs(f2 / f - 1) > 0.02) { f = f2; big = Resize(src, (int)Math.Round(cw * f), (int)Math.Round(chh * f)); }
+            }
+            // specks the interpolation leaves (a dark pixel or two off a stroke) are lightened: every dark shape is a digit
+            var dark = new bool[big.W * big.H];
+            for (int i = 0; i < dark.Length; i++) dark[i] = big.Px[i * 4] < 128;
+            var shapes = Components(dark, big.W, big.H);
+            int largest = shapes.Count == 0 ? 0 : shapes.Max(c => c.pixels.Count);
+            foreach (var sp in shapes.Where(c => c.pixels.Count < Math.Max(4, 0.02 * largest)))
+                foreach (int j in sp.pixels) big.Px[j * 4] = big.Px[j * 4 + 1] = big.Px[j * 4 + 2] = 192;
+            int pad = Math.Max(2, (int)Math.Round(0.25 * h * f - 2 * f)), W = big.W + 2 * pad, H = big.H + 2 * pad;
             var px = new byte[W * H * 4];
             for (int i = 0; i < px.Length; i++) px[i] = 255;
-            for (int y = 0; y < mask.H * f; y++)
-                for (int x = 0; x < mask.W * f; x++)
-                {
-                    int si = ((y / f) * mask.W + x / f) * 4, di = ((pad + y) * W + pad + x) * 4;
-                    px[di] = mask.Px[si]; px[di + 1] = mask.Px[si + 1]; px[di + 2] = mask.Px[si + 2];
-                }
+            for (int y = 0; y < big.H; y++) Buffer.BlockCopy(big.Px, y * big.W * 4, px, ((pad + y) * W + pad) * 4, big.W * 4);
             return new Img(W, H, px);
         }
 
@@ -818,7 +987,7 @@ namespace CAHelper
         /// The names of the two Tesseract inputs (diagnostics, and the OCR test sheet's Tesseract columns), and of the
         /// sheet's column with the digits picture's retries (PSM 8 / PSM 13, and the repeated lone digit). The count
         /// read uses the digits-isolated picture, and the raw one only when that gives nothing.
-        public const string TessDigitsName = "tesseract digits-isolated 3x", TessRawName = "tesseract raw 3x",
+        public const string TessDigitsName = "tesseract digits-isolated 48px", TessRawName = "tesseract raw 3x",
                             TessDigitsRetryName = "tesseract B psm8/13, x3";
 
         /// Tesseract's mean confidence (0..1) below this counts as "not read".
@@ -845,7 +1014,7 @@ namespace CAHelper
         /// Source labels of DecideTesseract (digits picture, diagnostics log).
         public const string TessAgree = "tesseract A+B agree", TessB = "tesseract B", TessA = "tesseract A", TessBOverA = "tesseract B (A differs)";
 
-        /// The count from the Tesseract reads of a slot: B = digits-isolated 3x (the best of its page modes,
+        /// The count from the Tesseract reads of a slot: B = digits-isolated (the best of its page modes,
         /// PickTesseractB), A = raw 3x, read only when B gave nothing (text + mean confidence; null text = not read /
         /// no picture). A read counts with >= 40% confidence and 1-5 digits. The raw picture is never trusted over B:
         /// it reads icon remains as digits with fair confidence.
@@ -898,27 +1067,25 @@ namespace CAHelper
             return best;
         }
 
-        /// A one-digit digits mask (black on white) as the digit three times with a space between (its own height
-        /// apart), the Tesseract input for PsmRepeated: enlarged `f` times with a white margin like
-        /// DigitsIsolatedPicture. null when the mask has no black pixel.
-        public static Img RepeatedDigitPicture(Img mask, int f = 3)
+        /// A one-digit digits picture (DigitsMask: dark on white) as the digit three times with a space between (its
+        /// own height apart), the Tesseract input for PsmRepeated, enlarged like DigitsIsolatedPicture. null when the
+        /// picture has no ink.
+        public static Img RepeatedDigitPicture(Img mask)
         {
             if (mask == null || mask.W <= 0 || mask.H <= 0) return null;
             int x0 = mask.W, x1 = -1, y0 = mask.H, y1 = -1;
             for (int y = 0; y < mask.H; y++) for (int x = 0; x < mask.W; x++)
-                if (mask.Px[(y * mask.W + x) * 4] == 0) { x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y); }
+                if (mask.Px[(y * mask.W + x) * 4] < 128) { x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y); }
             if (x1 < 0) return null;
+            // the digit with its anti-aliased rim (1 px around its dark pixels)
+            x0 = Math.Max(0, x0 - 1); y0 = Math.Max(0, y0 - 1); x1 = Math.Min(mask.W - 1, x1 + 1); y1 = Math.Min(mask.H - 1, y1 + 1);
             int gw = x1 - x0 + 1, gh = y1 - y0 + 1, space = gh, m = 2, W = 3 * gw + 2 * space + 2 * m, H = gh + 2 * m;
             var px = new byte[W * H * 4];
             for (int i = 0; i < px.Length; i++) px[i] = 255;
             for (int k = 0; k < 3; k++)
-                for (int y = 0; y < gh; y++) for (int x = 0; x < gw; x++)
-                {
-                    if (mask.Px[((y0 + y) * mask.W + x0 + x) * 4] != 0) continue;
-                    int o = ((m + y) * W + m + k * (gw + space) + x) * 4;
-                    px[o] = px[o + 1] = px[o + 2] = 0;
-                }
-            return DigitsIsolatedPicture(new Img(W, H, px), f);
+                for (int y = 0; y < gh; y++)
+                    Buffer.BlockCopy(mask.Px, ((y0 + y) * mask.W + x0) * 4, px, ((m + y) * W + m + k * (gw + space)) * 4, gw * 4);
+            return DigitsIsolatedPicture(new Img(W, H, px));
         }
 
         /// A digits-only read is trusted at once only if it matches the digits picture it was read from: as many
@@ -1019,13 +1186,22 @@ namespace CAHelper
         {
             if (f < 1) throw new ArgumentException("enlarge factor must be at least 1 (got " + f + ")");
             if (src.W <= 0 || src.H <= 0) throw new ArgumentException($"image to enlarge is empty ({src.W}x{src.H})");
-            int W = src.W * f, H = src.H * f;
+            return Resize(src, src.W * f, src.H * f);
+        }
+
+        /// Bicubic resampling (Keys, a = -0.5) to W x H, edges clamped, opaque result. Meant for enlarging (no
+        /// low-pass filter for shrinking).
+        public static Img Resize(Img src, int W, int H)
+        {
+            if (src.W <= 0 || src.H <= 0) throw new ArgumentException($"image to resize is empty ({src.W}x{src.H})");
+            if (W <= 0 || H <= 0) throw new ArgumentException($"resized image would be empty ({W}x{H})");
+            double fx = (double)W / src.W, fy = (double)H / src.H;
             double K(double t) { t = Math.Abs(t); return t <= 1 ? (1.5 * t - 2.5) * t * t + 1 : t < 2 ? ((-0.5 * t + 2.5) * t - 4) * t + 2 : 0; }
             // horizontal pass: src.H rows x W columns, 3 channels
             var tmp = new double[src.H * W * 3];
             for (int x = 0; x < W; x++)
             {
-                double u = (x + 0.5) / f - 0.5; int x0 = (int)Math.Floor(u);
+                double u = (x + 0.5) / fx - 0.5; int x0 = (int)Math.Floor(u);
                 for (int k = -1; k <= 2; k++)
                 {
                     double w = K(u - (x0 + k)); if (w == 0) continue;
@@ -1040,7 +1216,7 @@ namespace CAHelper
             var px = new byte[W * H * 4];
             for (int y = 0; y < H; y++)
             {
-                double v = (y + 0.5) / f - 0.5; int y0 = (int)Math.Floor(v);
+                double v = (y + 0.5) / fy - 0.5; int y0 = (int)Math.Floor(v);
                 for (int x = 0; x < W; x++)
                 {
                     double c0 = 0, c1 = 0, c2 = 0;
@@ -1140,7 +1316,8 @@ namespace CAHelper
                     if (m == null || empty < m.Value.d) continue;                   // empty slot, unknown item, or ambiguous
                     var best = m.Value;
                     var s = new SlotRead { Row = r, Col = c, Item = best.name, IconDist = best.d };
-                    s.GlyphCount = CountGlyphs(CropImg(img, DigitBand(g, r, c)), g.Scale).Count;
+                    FindCountBand(img, g, r, c, out var glyphs);
+                    s.GlyphCount = glyphs.Count;
                     list.Add(s);
                 }
             return list;
@@ -1154,37 +1331,250 @@ namespace CAHelper
         // Grid origin relative to the button template's top-left, and the cross relative to the button (2560x1440 px).
         public const double ButtonToGridX = -6, ButtonToGridY = -636, ButtonToCrossX = 585, ButtonToCrossY = -737;
 
-        /// Mean absolute grey difference between a template (scaled) and the image at (x, y); sampled every `step` px.
-        public static double TemplateDiff(Img img, byte[] tpl, int tw, int th, int x, int y, double scale, int step = 1)
+        // ---------- template search at any UI scale ----------
+        /// UI scales the anchor search covers (1 = the 2560x1440 reference; the game's UI size option and other
+        /// resolutions move it), and the coarse step between the scales tried.
+        public const double MinUiScale = 0.5, MaxUiScale = 1.6, UiScaleStep = 1.08;
+
+        /// Grey values (luminance, (r+g+b)/3) of a part of an image, row by row: the template search's input.
+        /// (X0, Y0) = its top-left in the image; a Down() plane holds d x d block averages (cell coordinates).
+        public sealed class Plane
         {
-            double sum = 0; int n = 0;
-            for (int ty = 0; ty < th; ty += step)
-                for (int tx = 0; tx < tw; tx += step)
+            public readonly int X0, Y0, W, H; public readonly float[] V;
+            public Plane(int x0, int y0, int w, int h, float[] v) { X0 = x0; Y0 = y0; W = w; H = h; V = v; }
+            public static Plane Of(Img img, Rectangle r)
+            {
+                r = Rectangle.Intersect(r, new Rectangle(0, 0, img.W, img.H));
+                int w = Math.Max(0, r.Width), h = Math.Max(0, r.Height);
+                var v = new float[w * h];
+                for (int y = 0; y < h; y++)
                 {
-                    int px = x + (int)Math.Round(tx * scale), py = y + (int)Math.Round(ty * scale);
-                    if (px < 0 || py < 0 || px >= img.W || py >= img.H) return double.MaxValue;
-                    sum += Math.Abs(img.Lum(px, py) - tpl[ty * tw + tx]); n++;
+                    int si = ((r.Y + y) * img.W + r.X) * 4, di = y * w;
+                    for (int x = 0; x < w; x++, si += 4) v[di + x] = (img.Px[si] + img.Px[si + 1] + img.Px[si + 2]) / 3f;
                 }
-            return n == 0 ? double.MaxValue : sum / n;
+                return new Plane(r.X, r.Y, w, h, v);
+            }
+            public Plane Down(int d)
+            {
+                int w = W / d, h = H / d; var v = new float[w * h]; float k = 1f / (d * d);
+                for (int y = 0; y < h * d; y++) { int row = y * W, o = (y / d) * w; for (int x = 0; x < w * d; x++) v[o + x / d] += V[row + x]; }
+                for (int i = 0; i < v.Length; i++) v[i] *= k;
+                return new Plane(X0, Y0, w, h, v);
+            }
         }
 
-        /// Best template position inside a search rectangle: coarse pass every 4 px on a subsampled template, then a
-        /// fine pass around the best coarse hit. Returns the top-left and the mean difference (lower is better).
+        /// A grey template resampled to `scale`: each output pixel is the average of the template over the area it
+        /// covers (bilinear samples, 2 or more per source pixel), so shrinking behaves like a smaller UI.
+        public static float[] ScaleTemplate(byte[] tpl, int tw, int th, double scale, out int w, out int h)
+        {
+            w = Math.Max(1, (int)Math.Round(tw * scale)); h = Math.Max(1, (int)Math.Round(th * scale));
+            var o = new float[w * h];
+            if (w == tw && h == th) { for (int i = 0; i < o.Length; i++) o[i] = tpl[i]; return o; }
+            double sx = (double)tw / w, sy = (double)th / h;
+            int kx = 2 * Math.Max(1, (int)Math.Ceiling(sx)), ky = 2 * Math.Max(1, (int)Math.Ceiling(sy));
+            for (int oy = 0; oy < h; oy++)
+                for (int ox = 0; ox < w; ox++)
+                {
+                    double sum = 0;
+                    for (int j = 0; j < ky; j++)
+                        for (int i = 0; i < kx; i++)
+                        {
+                            double u = Math.Min(tw - 1, Math.Max(0, (ox + (i + 0.5) / kx) * sx - 0.5)), v = Math.Min(th - 1, Math.Max(0, (oy + (j + 0.5) / ky) * sy - 0.5));
+                            int x0 = (int)u, y0 = (int)v, x1 = Math.Min(tw - 1, x0 + 1), y1 = Math.Min(th - 1, y0 + 1); double fx = u - x0, fy = v - y0;
+                            sum += (tpl[y0 * tw + x0] * (1 - fx) + tpl[y0 * tw + x1] * fx) * (1 - fy) + (tpl[y1 * tw + x0] * (1 - fx) + tpl[y1 * tw + x1] * fx) * fy;
+                        }
+                    o[oy * w + ox] = (float)(sum / (kx * ky));
+                }
+            return o;
+        }
+
+        /// d x d block averages of a (scaled) template; partial blocks dropped.
+        static float[] DownTemplate(float[] t, int w, int h, int d, out int cw, out int ch)
+        {
+            cw = w / d; ch = h / d; var o = new float[cw * ch]; float k = 1f / (d * d);
+            for (int y = 0; y < ch * d; y++) for (int x = 0; x < cw * d; x++) o[(y / d) * cw + x / d] += t[y * w + x];
+            for (int i = 0; i < o.Length; i++) o[i] *= k;
+            return o;
+        }
+
+        /// Mean absolute grey difference between a template (tw x th) and the plane at (x, y) (plane coordinates),
+        /// sampled every `step` px. Stops early (returns +inf) once the mean can no longer stay under `stopAt`; also
+        /// +inf when the template doesn't fit on the plane there.
+        static double PlaneDiff(Plane p, float[] t, int tw, int th, int x, int y, int step, double stopAt)
+        {
+            if (x < 0 || y < 0 || x + tw > p.W || y + th > p.H) return double.MaxValue;
+            int n = ((tw + step - 1) / step) * ((th + step - 1) / step);
+            double sum = 0, limit = stopAt >= double.MaxValue / 2 ? double.MaxValue : stopAt * n;
+            var v = p.V;
+            for (int ty = 0; ty < th; ty += step)
+            {
+                int row = (y + ty) * p.W + x, trow = ty * tw;
+                for (int tx = 0; tx < tw; tx += step) { float d = v[row + tx] - t[trow + tx]; sum += d < 0 ? -d : d; }
+                if (sum > limit) return double.MaxValue;
+            }
+            return sum / n;
+        }
+
+        /// Mean absolute grey difference between a template scaled to `scale` and the image at (x, y); every `step` px.
+        public static double TemplateDiff(Img img, byte[] tpl, int tw, int th, int x, int y, double scale, int step = 1)
+        {
+            var t = ScaleTemplate(tpl, tw, th, scale, out int w, out int h);
+            return PlaneDiff(Plane.Of(img, new Rectangle(x, y, w, h)), t, w, h, 0, 0, step, double.MaxValue);
+        }
+
+        /// Best position of a template at a fixed scale: its top-left anywhere inside `search` (image coordinates; the
+        /// template itself may reach past it). Small searches are exhaustive; large ones go every 4 px on a subsampled
+        /// template first, then pixel by pixel around the best hit. Returns the top-left and the mean difference.
         public static (Point at, double diff) FindTemplate(Img img, byte[] tpl, int tw, int th, Rectangle search, double scale)
         {
             search = Rectangle.Intersect(search, new Rectangle(0, 0, img.W, img.H));
+            var t = ScaleTemplate(tpl, tw, th, scale, out int w, out int h);
+            if (search.Width <= 0 || search.Height <= 0) return (Point.Empty, double.MaxValue);
+            var p = Plane.Of(img, new Rectangle(search.X, search.Y, search.Width + w, search.Height + h));
             Point best = Point.Empty; double bestD = double.MaxValue;
-            for (int y = search.Y; y < search.Bottom; y += 4)
-                for (int x = search.X; x < search.Right; x += 4)
-                { double d = TemplateDiff(img, tpl, tw, th, x, y, scale, 4); if (d < bestD) { bestD = d; best = new Point(x, y); } }
-            if (bestD == double.MaxValue) return (best, bestD);
-            Point fine = best; double fineD = double.MaxValue;
-            for (int y = best.Y - 4; y <= best.Y + 4; y++)
-                for (int x = best.X - 4; x <= best.X + 4; x++)
-                { double d = TemplateDiff(img, tpl, tw, th, x, y, scale, 1); if (d < fineD) { fineD = d; fine = new Point(x, y); } }
-            return (fine, fineD);
+            bool exhaustive = (long)search.Width * search.Height * w * h <= 8000000L;
+            int stride = exhaustive ? 1 : 4, step = exhaustive ? 1 : Math.Max(1, Math.Min(4, w / 8));
+            for (int y = 0; y < search.Height; y += stride)
+                for (int x = 0; x < search.Width; x += stride)
+                { double d = PlaneDiff(p, t, w, h, x, y, step, bestD); if (d < bestD) { bestD = d; best = new Point(x, y); } }
+            if (bestD == double.MaxValue) return (new Point(search.X + best.X, search.Y + best.Y), bestD);
+            if (!exhaustive)
+            {
+                Point c = best; bestD = double.MaxValue;
+                for (int y = c.Y - 4; y <= c.Y + 4; y++)
+                    for (int x = c.X - 4; x <= c.X + 4; x++)
+                    { double d = PlaneDiff(p, t, w, h, x, y, 1, bestD); if (d < bestD) { bestD = d; best = new Point(x, y); } }
+            }
+            return (new Point(p.X0 + best.X, p.Y0 + best.Y), bestD);
+        }
+
+        public struct TemplateHit { public Point At; public double Scale, Diff; }
+        /// Coarse candidates with a block-average difference above this aren't refined.
+        public const double CoarseDiffMax = 60;
+
+        /// The template anywhere in `search` at any scale from sMin to sMax, best matches first (at most `keep`, mean
+        /// grey difference at full resolution, each a different spot). Coarse to fine: every scale (steps of 8%) on
+        /// 4x4 or 8x8 block averages (the template at least 8 blocks wide), the three best spots per scale; the six
+        /// best spots refined over +-12% of scale in 2% steps and +-1 block (every 2nd template pixel), then +-2% in
+        /// 0.5% steps and +-2 px, then +-0.5% in 0.25% steps and +-1 px with the whole template.
+        public static List<TemplateHit> FindTemplateMultiScale(Img img, byte[] tpl, int tw, int th, Rectangle search, double sMin = MinUiScale, double sMax = MaxUiScale, int keep = 4)
+        {
+            var hits = new List<TemplateHit>();
+            var P = Plane.Of(img, search);
+            if (P.W <= 0 || P.H <= 0) return hits;
+            var levels = new Dictionary<int, Plane>();
+            var cand = new List<(int x, int y, int d, double s, double diff)>();
+            for (double s = sMin; s <= sMax * 1.0001; s *= UiScaleStep)
+            {
+                var ts = ScaleTemplate(tpl, tw, th, s, out int w, out int h);
+                if (w > P.W || h > P.H) break;
+                int D = w >= 64 ? 8 : w >= 32 ? 4 : 2;
+                if (!levels.TryGetValue(D, out var L)) levels[D] = L = P.Down(D);
+                var tc = DownTemplate(ts, w, h, D, out int cw, out int ch);
+                var best = new List<(int cx, int cy, double d)>();
+                double bound = CoarseDiffMax;
+                for (int cy = 0; cy + ch <= L.H; cy++)
+                    for (int cx = 0; cx + cw <= L.W; cx++)
+                    {
+                        double d = PlaneDiff(L, tc, cw, ch, cx, cy, 1, bound);
+                        if (d >= bound) continue;
+                        int near = best.FindIndex(b => Math.Abs(b.cx - cx) * 2 < cw && Math.Abs(b.cy - cy) * 2 < ch);
+                        if (near >= 0) { if (d < best[near].d) best[near] = (cx, cy, d); }
+                        else if (best.Count < 3) best.Add((cx, cy, d));
+                        else { int worst = 0; for (int i = 1; i < best.Count; i++) if (best[i].d > best[worst].d) worst = i; best[worst] = (cx, cy, d); }
+                        if (best.Count == 3) bound = best.Max(b => b.d);
+                    }
+                foreach (var b in best) cand.Add((b.cx * D, b.cy * D, D, s, b.d));
+            }
+            // one candidate per spot (the same button matches at neighbouring scales too), the best spots refined
+            var spots = new List<(int x, int y, int d, double s, double diff)>();
+            foreach (var c in cand.OrderBy(c => c.diff))
+            {
+                double half = tw * c.s / 2;
+                if (spots.Any(q => Math.Abs(q.x - c.x) < half && Math.Abs(q.y - c.y) < half)) continue;
+                spots.Add(c);
+                if (spots.Count == 6) break;
+            }
+            foreach (var c in spots)
+            {
+                // +-12% of scale in 2% steps (the spot's best coarse scale can be a step off), +-1 block (every 2nd template pixel); +-2% in 0.5% steps, +-2 px;
+                // +-0.5% in 0.25% steps, +-1 px with the whole template
+                Point fp = new Point(c.x, c.y); double fd = double.MaxValue, fs = c.s;
+                foreach (var (range, stepS, reach, sample) in new[] { (6, 0.02, c.d, 2), (4, 0.005, 2, 2), (2, 0.0025, 1, 1) })
+                {
+                    Point p0 = fp; double s0 = fs; fd = double.MaxValue;
+                    for (int k = -range; k <= range; k++)
+                    {
+                        double s2 = s0 * (1 + stepS * k);
+                        var t2 = ScaleTemplate(tpl, tw, th, s2, out int w2, out int h2);
+                        for (int y = p0.Y - reach; y <= p0.Y + reach; y++)
+                            for (int x = p0.X - reach; x <= p0.X + reach; x++)
+                            { double d = PlaneDiff(P, t2, w2, h2, x, y, sample, fd); if (d < fd) { fd = d; fp = new Point(x, y); fs = s2; } }
+                    }
+                    if (fd == double.MaxValue) break;
+                }
+                if (fd == double.MaxValue) continue;
+                var at = new Point(P.X0 + fp.X, P.Y0 + fp.Y);
+                double size = tw * fs;
+                if (hits.Any(hh => Math.Abs(hh.At.X - at.X) < size / 2 && Math.Abs(hh.At.Y - at.Y) < size / 2)) continue;   // same spot, another scale
+                hits.Add(new TemplateHit { At = at, Scale = fs, Diff = fd });
+            }
+            return hits.OrderBy(hh => hh.Diff).Take(keep).ToList();
         }
         public const double ButtonGoodMax = 22, CrossGoodMax = 30;
+
+        /// How far the button template's scale may be off (the cross search reaches that far, and a cross-measured
+        /// scale further off is not trusted): the template alone pins the scale to a few %.
+        public const double CrossScaleTolerance = 0.08;
+
+        /// The close cross for a button found at `button` (top-left) at `scale`: searched within 8% of the
+        /// button-to-cross distance (~940 px at scale 1) around where it should be, at the same scale. Also returns the
+        /// scale that distance gives (it pins the scale to ~0.1%).
+        public static (Point at, double diff, double scale, Rectangle search) FindCross(Img img, Point button, double scale)
+        {
+            double refDist = Math.Sqrt(ButtonToCrossX * ButtonToCrossX + ButtonToCrossY * ButtonToCrossY);
+            int win = Math.Max(6, (int)Math.Ceiling(CrossScaleTolerance * refDist * scale));
+            int cx = (int)Math.Round(button.X + ButtonToCrossX * scale), cy = (int)Math.Round(button.Y + ButtonToCrossY * scale);
+            var search = new Rectangle(cx - win, cy - win, 2 * win + 1, 2 * win + 1);
+            var (at, d) = FindTemplate(img, CrossTemplate, CrossW, CrossH, search, scale);
+            double dx = at.X - button.X, dy = at.Y - button.Y;
+            return (at, d, Math.Sqrt(dx * dx + dy * dy) / refDist, search);
+        }
+
+        /// A button match at a roughly known scale made exact: the close cross (same scale) gives the scale from its
+        /// distance to the button, and when that is more than 2% off, the button is matched again at that scale (the
+        /// best top-left moves with the scale). Without a convincing cross the match is kept as it is.
+        static (Point at, double scale, double diff) PinScale(Img img, TemplateHit hit)
+        {
+            var cr = FindCross(img, hit.At, hit.Scale);
+            if (cr.diff > CrossGoodMax || Math.Abs(cr.scale / hit.Scale - 1) >= CrossScaleTolerance) return (hit.At, hit.Scale, hit.Diff);
+            if (Math.Abs(cr.scale / hit.Scale - 1) <= 0.02) return (hit.At, cr.scale, hit.Diff);      // close enough: the top-left holds
+            int reach = 3 + (int)Math.Ceiling(ButtonW * Math.Abs(cr.scale - hit.Scale));
+            var (at, d) = FindTemplate(img, ButtonTemplate, ButtonW, ButtonH, new Rectangle(hit.At.X - reach, hit.At.Y - reach, 2 * reach + 1, 2 * reach + 1), cr.scale);
+            return d <= Math.Max(ButtonGoodMax, hit.Diff) ? (at, cr.scale, d) : (hit.At, hit.Scale, hit.Diff);
+        }
+
+        /// The grid a button match gives (grid origin = button + offset x scale, slot size RefPitch x scale). When that
+        /// fails the contrast check it is moved by up to ~2 px (scale-relative) to where its border lines are brightest
+        /// against the slot insides: at small UI scales the 1-2 px lines blur, and a pixel off already weakens them.
+        public static Grid GridFromButton(Img img, Point button, double scale)
+        {
+            var g = new Grid { X = button.X + ButtonToGridX * scale, Y = button.Y + ButtonToGridY * scale, PitchX = RefPitch * scale, PitchY = RefPitch * scale };
+            g.Score = BorderContrast(img, g);
+            if (InventoryOpen(img, g)) return g;
+            int reach = Math.Max(2, (int)Math.Round(2 * scale));
+            Grid best = g; double bestC = double.MinValue;
+            for (int dy = -reach; dy <= reach; dy++)
+                for (int dx = -reach; dx <= reach; dx++)
+                {
+                    var c = g; c.X += dx; c.Y += dy;
+                    if (c.X < 0 || c.Y < 0 || c.X + 8 * c.PitchX >= img.W || c.Y + 8 * c.PitchY >= img.H) continue;
+                    double v = BorderContrast(img, c) - 0.01 * (Math.Abs(dx) + Math.Abs(dy));   // ties: the unmoved grid
+                    if (v > bestC) { bestC = v; best = c; }
+                }
+            best.Score = BorderContrast(img, best);
+            return best;
+        }
 
         public sealed class AnchorResult
         {
@@ -1192,48 +1582,74 @@ namespace CAHelper
             public Rectangle ButtonSearch, CrossSearch, ButtonAt, CrossAt;   // image coordinates
             public double ButtonDiff = double.MaxValue, CrossDiff = double.MaxValue;
             public double ScaleCheck;
+            /// The UI scale the button was matched at (the cross-refined one when it had to be searched for).
+            public double Scale;
+            /// True when the button wasn't at the given scale near the grid and was searched at every scale.
+            public bool ScaleSearched;
         }
 
-        /// Pins the grid to the sword button (and checks the scale with the close cross). Looks within about a slot of
-        /// where the button should be for the given grid; if it isn't there, over the whole picture. ok = false when the
-        /// button isn't found convincingly (then the given grid is returned unchanged).
-        public static Grid AnchorByButtons(Img img, Grid g, out bool ok, out string info) { var r = AnchorByButtons(img, g, out var res); ok = res.Ok; info = res.Info; return r; }
-        public static Grid AnchorByButtons(Img img, Grid g, out AnchorResult res)
+        /// Pins the grid to the sword button (and checks the scale with the close cross, at the same scale). Looks
+        /// within about a slot of where the button should be for the given grid at `scale` (0 = the grid's own slot
+        /// size); if it isn't there, over the whole picture at every UI scale (MinUiScale..MaxUiScale), and then the
+        /// cross pins the scale and the grid there must show an inventory. ok = false when the button isn't found
+        /// convincingly (then the given grid is returned unchanged). A grid found at another scale gets the slot size
+        /// RefPitch x scale (res.Scale).
+        public static Grid AnchorByButtons(Img img, Grid g, out bool ok, out string info, double scale = 0) { var r = AnchorByButtons(img, g, out var res, scale); ok = res.Ok; info = res.Info; return r; }
+        public static Grid AnchorByButtons(Img img, Grid g, out AnchorResult res, double scale = 0)
         {
             res = new AnchorResult();
-            double sc = g.Scale;
+            double sc = scale > 0 ? scale : g.Scale;
             int ex = (int)Math.Round(g.X - ButtonToGridX * sc), ey = (int)Math.Round(g.Y - ButtonToGridY * sc);
-            int win = (int)Math.Round(g.PitchX);
+            int win = (int)Math.Round(RefPitch * sc);
             res.ButtonSearch = new Rectangle(ex - win, ey - win, 2 * win + (int)(ButtonW * sc), 2 * win + (int)(ButtonH * sc));
             var (bAt, bD) = FindTemplate(img, ButtonTemplate, ButtonW, ButtonH, new Rectangle(ex - win, ey - win, 2 * win + 1, 2 * win + 1), sc);
+            Grid? snapped = null;
             if (bD > ButtonGoodMax)
             {
-                var (bAt2, bD2) = FindTemplate(img, ButtonTemplate, ButtonW, ButtonH, new Rectangle(0, 0, img.W, img.H), sc);   // anywhere in the picture
-                if (bD2 < bD) { bAt = bAt2; bD = bD2; res.ButtonSearch = new Rectangle(0, 0, img.W, img.H); }
+                var whole = new Rectangle(0, 0, img.W, img.H);
+                foreach (var hit in FindTemplateMultiScale(img, ButtonTemplate, ButtonW, ButtonH, whole))
+                {
+                    if (hit.Diff > ButtonGoodMax || hit.Diff >= bD) break;
+                    var (at, s, d) = PinScale(img, hit);
+                    var t = GridFromButton(img, at, s);
+                    if (!InventoryOpen(img, t)) continue;                       // a button, but no inventory above it
+                    bAt = at; bD = d; sc = s; res.ButtonSearch = whole; res.ScaleSearched = true; snapped = t;
+                    break;
+                }
             }
             res.ButtonAt = new Rectangle(bAt.X, bAt.Y, (int)(ButtonW * sc), (int)(ButtonH * sc)); res.ButtonDiff = bD;
-            if (bD > ButtonGoodMax) { res.Ok = false; res.Info = $"button not found (best diff {bD:0.0}, limit {ButtonGoodMax})"; return g; }
+            if (bD > ButtonGoodMax) { res.Ok = false; res.Info = $"button not found (best diff {bD:0.0}, limit {ButtonGoodMax}, scale {sc:0.000})"; return g; }
             var r = g; r.X = bAt.X + ButtonToGridX * sc; r.Y = bAt.Y + ButtonToGridY * sc;
-            int cx = (int)Math.Round(bAt.X + ButtonToCrossX * sc), cy = (int)Math.Round(bAt.Y + ButtonToCrossY * sc);
-            res.CrossSearch = new Rectangle(cx - win, cy - win, 2 * win + (int)(CrossW * sc), 2 * win + (int)(CrossH * sc));
-            var (xAt, xD) = FindTemplate(img, CrossTemplate, CrossW, CrossH, new Rectangle(cx - win, cy - win, 2 * win + 1, 2 * win + 1), sc);
+            if (snapped is Grid sn) { r.X = sn.X; r.Y = sn.Y; }
+            if (Math.Abs(sc / g.Scale - 1) > 0.02) { r.PitchX = r.PitchY = RefPitch * sc; }   // the grid was at another scale
+            var (xAt, xD, _, xSearch) = FindCross(img, bAt, sc);
+            res.CrossSearch = new Rectangle(xSearch.X, xSearch.Y, xSearch.Width + (int)(CrossW * sc), xSearch.Height + (int)(CrossH * sc));
             res.CrossAt = new Rectangle(xAt.X, xAt.Y, (int)(CrossW * sc), (int)(CrossH * sc)); res.CrossDiff = xD;
             res.ScaleCheck = (xAt.X - bAt.X) / (ButtonToCrossX * sc);
+            res.Scale = sc;
             string crossInfo = xD <= CrossGoodMax ? $"cross at {xAt.X},{xAt.Y} (diff {xD:0.0}, scale check {res.ScaleCheck:0.000})" : $"cross not found (diff {xD:0.0})";
-            res.Ok = true; res.Info = $"button at {bAt.X},{bAt.Y} (diff {bD:0.0}) -> grid {r.X:0},{r.Y:0}; " + crossInfo;
+            res.Ok = true; res.Info = $"button at {bAt.X},{bAt.Y} (diff {bD:0.0}, scale {sc:0.000}{(res.ScaleSearched ? ", searched" : "")}) -> grid {r.X:0},{r.Y:0}; " + crossInfo;
             return r;
         }
 
-        /// Finds the inventory anywhere on screen by its sword button (unique, never animates) at the given UI scale.
-        public static Grid? LocateByButton(Img screen, double scale, out double diff)
+        /// Finds the inventory anywhere on screen by its sword button (unique, never animates) at any UI scale: the
+        /// button template over MinUiScale..MaxUiScale (FindTemplateMultiScale), the scale pinned by the close cross,
+        /// slot size = RefPitch x scale, and the grid there must pass the border contrast check (InventoryOpen).
+        /// diff = the button's match (lower is better), scale = the UI scale found. null = no convincing inventory.
+        public static Grid? LocateByButton(Img screen, out double diff, out double scale)
         {
-            var (at, d) = FindTemplate(screen, ButtonTemplate, ButtonW, ButtonH, new Rectangle(0, 0, screen.W, screen.H), scale);
-            diff = d;
-            if (d > ButtonGoodMax) return null;
-            var g = new Grid { X = at.X + ButtonToGridX * scale, Y = at.Y + ButtonToGridY * scale, PitchX = RefPitch * scale, PitchY = RefPitch * scale };
-            if (g.X < 0 || g.Y < 0) return null;
-            g.Score = BorderContrast(screen, g);
-            return g;
+            diff = double.MaxValue; scale = 0;
+            foreach (var hit in FindTemplateMultiScale(screen, ButtonTemplate, ButtonW, ButtonH, new Rectangle(0, 0, screen.W, screen.H)))
+            {
+                if (diff == double.MaxValue) { diff = hit.Diff; scale = hit.Scale; }
+                if (hit.Diff > ButtonGoodMax) break;
+                var (at, s, d) = PinScale(screen, hit);
+                var g = GridFromButton(screen, at, s);
+                if (g.X < 0 || g.Y < 0 || g.X + 8 * g.PitchX >= screen.W || g.Y + 8 * g.PitchY >= screen.H || !InventoryOpen(screen, g)) continue;
+                diff = d; scale = s;
+                return g;
+            }
+            return null;
         }
 
         /// Score of a read: recognised cores, slots whose count band holds digit glyphs, icon closeness.
