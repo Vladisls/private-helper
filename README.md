@@ -127,17 +127,17 @@ FARM TRACKER
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
-- Stack counts are read by Windows' text reader, generically: the count region is found from the size
-  and position of the digit glyphs only (anchored on the last digit, which never touches the icon),
-  its raw pixels are enlarged and read, and the count is the trailing run of digits (icon remains the
-  reader turns into characters sit on the left and are dropped). No font shapes are assumed, so a
-  font change or another resolution doesn't matter. Built-in digit shapes are only a last resort for
-  a slot the reader returns nothing for.
-- Diagnostics: when a count changes between reads or the two readers disagree, the strip the reader
-  saw (cabal-helper-farm-digits-N.png) and the exact inventory frame (cabal-helper-farm-frame-N.png)
+- Stack counts come only from Windows' text reader, on a generic count region: the region is found
+  from the size and position of the digit glyphs only (anchored on the last digit, which never
+  touches the icon), its raw pixels are enlarged and read, and the count is the trailing run of
+  digits (icon remains the reader turns into characters sit on the left and are dropped). No digit
+  or font shapes are stored or matched, so a font change or another resolution doesn't matter.
+  A slot with no count drawn at all is a single item (1).
+- Diagnostics: when a count changes between reads, the strip the reader saw
+  (cabal-helper-farm-digits-N.png) and the exact inventory frame (cabal-helper-farm-frame-N.png)
   are saved, last 5 of each.
-- A count shown as unreadable:
-  Areas & learning > Fix counts, type the real number once and the digit is learned.
+- A count shown as unreadable ("?"): Areas & learning > Diagnostics: last count strip shows what
+  the text reader saw and returned.
 - The grid is pinned to two fixed parts of the inventory window that never animate: the sword
   button under the slots (the grid is a fixed offset above it) and the close cross at the top
   right (their distance checks the scale). No twitching between reads.

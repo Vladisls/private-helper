@@ -234,10 +234,10 @@ namespace CAHelper
         }
 
         public const int DigitEnlarge = 3, DigitGap = 6;
-        /// What the last count read looked like (for diagnostics): the enlarged strip, the cleaned strip, the words.
+        /// What the last count read looked like (for diagnostics): the enlarged strip (twice: plain, and with the words).
         public static Bitmap LastStrip, LastClean; public static List<OcrWord> LastWords = new List<OcrWord>();
 
-        /// Saves the last strip (raw | cleaned, with the reader's words drawn on) for diagnostics.
+        /// Saves the last strip (plain | with the reader's words drawn on) for diagnostics.
         public static void SaveLastStrip(string path)
         {
             if (LastStrip == null || LastClean == null) return;
@@ -256,10 +256,11 @@ namespace CAHelper
             }
         }
 
-        /// Reads the stack counts of several slots with the text reader in one call: each slot's validated digit
-        /// cells (already dark-on-white) are enlarged and stacked into one strip. A result is only accepted when the
-        /// reader returns exactly as many digits as there are cells. null entries = not read.
-        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> cellCounts)
+        /// Reads the stack counts of several slots with the text reader in one call: each slot's count region (raw
+        /// pixels, found by glyph size and position only) is enlarged and stacked into one strip; each count is the
+        /// trailing run of digits the reader returns for its region. glyphCounts = digit-sized glyphs per region
+        /// (for diagnostics). null entries = not read.
+        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> glyphCounts)
         {
             var result = new int?[strips.Count];
             var present = new List<int>(); for (int i = 0; i < strips.Count; i++) if (strips[i] != null) present.Add(i);

@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Drawing;
-using System.Text;
 
 namespace CAHelper
 {
@@ -23,56 +22,17 @@ namespace CAHelper
 
     public struct Grid { public double X, Y, PitchX, PitchY, Score; public double Scale => PitchX / FarmCheck.RefPitch; }
 
-    public sealed class SlotRead { public int Row, Col; public string Item; public double IconDist; public int? Count; public List<string> Cells = new List<string>(); }
+    /// Count = the stack count read by the text reader (null until read, or when it couldn't be read).
+    /// GlyphCount = digit-sized glyphs found in the slot's count band (0 = no count drawn).
+    public sealed class SlotRead { public int Row, Col; public string Item; public double IconDist; public int? Count; public int GlyphCount; }
 
     /// Pixel logic for the Farm Tracker: inventory grid, core icons, stack digits, end-window trigger, loot-feed diff.
     /// Numbers were tuned on real 2560x1440 screenshots; other resolutions scale by the detected slot size.
     public static class FarmCheck
     {
         public const double RefPitch = 76.75;
-        public const int CW = 11, CH = 17, DigitRight = 69, DigitTop = 46, SlotInset = 8;
+        public const int SlotInset = 8;
 
-        // digit cells (11x17) sampled from a 2560x1440 screenshot, 2026-09-28
-        public static readonly (char d, string cell)[] Digits = {
-            // digit cells anchored on the count's last glyph, from a live 2026-09-29 frame (PNG rendering)
-            ('9', "...............####.....#######....##....##..###....##..##......##.###.....##..##....###..#########....###..##........###........##.........##........##....#######....#####..............."),   // live 2026-09-29, Upgrade Core (Low)
-            ('9', "...............####.....#######....##....##..###....##..##......##.###.....##..##....###..#########....###..##........###........##.........##........##....#######....#####..............."),   // live 2026-09-29, Upgrade Core (High)
-            ('0', "...............###......#######...###...##...##.....##.###.....##.##......##.##......##.##......##.##......##.##......##.###.....##..##.....##..###...##....#######.....####..............."),   // live 2026-09-29, Upgrade Core (High)
-            ('2', "............#####.....#######....#....###.........##.........##........###........##........###.......###......####.......##......#.##.......#.##.........########...########.............."),   // live 2026-09-29, Upgrade Core (High)
-            ('4', "..................##........###........###.......####......##.##......##.##.....##..##....##...##...###...##...##....##..######################.......##.........##.........##............."),   // live 2026-09-29, Upgrade Core (Medium)
-            ('1', ".................#........###......#####......##.##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##..............."),   // live 2026-09-29, Upgrade Core (Medium)
-            // '7' from a live helper capture (Upgrade Core (High) = 172), 2026-09-28
-            ('7', "...........##########.##########.........##........##.........##........##.........##........##.........##........##.........##........##.........##........##.........##........##........"),
-            ('3', "..............#####.....#######..........##.........##.........##........##.......###.......####..........##..........##.........##.........##.........##..#.....##...########....#####...."),
-            ('_', ".....................................................................................................................................#..........#..........#..............................."),
-            ('8', "..............###......#######....#.....##..##.....##..##.....##..###....#....###..##.....#####.....##..###....#.....##..##......##.##......##.##......##..##....##...#######......####...."),
-            ('0', ".............####......######....##....##...#...#..#...#...##.#...#......##..#......##..#......##..#......##..#......##..#......##..#......##..#......#...##....##....######......####....."),
-            ('2', ".............###........#####.........##..........##.........##..#......##..#......#...#.....##...#....##....#....#.....##.###..##.#..##....#.#.##........##.........########...########..."),
-            ('_', ".............................................................................................................................#######...............#...........................#..........#"),
-            ('4', "..................##........###.......####.......#.##......#..##.....##..##....##...##...##....##...#.....##...#########..#########........##.........##.........##.........##.........##.."),
-            ('4', "...............#..##........###.......####.......#.##......#..##.....##..##....##...##...##....##...#.....##...#########...########........##.........##.........##.........##.........##.."),
-            ('1', "................##.........##......#####......#####.........##.........##.........##.........##.........##.........##.......#.##.......#.##.#..#..#.##.........##...#.....##......#######.."),
-            ('_', "...............................................................................................................................................#.#.............#..........................."),
-            ('4', "..................##........###.......####.......#.##......#..##.....##..##....##...##...##....##...#.....##...#########..#########........##.........##.........##.........##.........##.."),
-            ('1', "................##.........##......#####......#####.........##.........##.........##.........##.........##.........##.........##.........##.........##.......#.##.........##......#######.."),
-            ('_', "..........................................................................................................................................................................................."),
-            ('9', "..............####......######....##....##..##......#..##......##.##......##.##......##..##.....##..#########....####.##.........#..........#.........##........##....######.....####......"),
-            ('_', "...............................................#..........#..........#..........#..........#..............................................................................................."),
-            ('5', ".............########...########...##.........##.........##.........##.........#####......#######.........##..........##.........##.........##.........##........##....#######.....####...."),
-            ('_', ".................................#........................................................#..........##.........#.........#................................................................"),
-            ('4', "..................##........###.......####......##.##......#..##.....##..##....##...##...##....##...#.....##...#########..#########........##.........##.........##.........##.........##.."),
-            ('3', "..............#####....########...#......##.........##.........##........##.......###.......####..........##....#.....##..#......##.........##.........##..#.....##...########.....####...."),
-            ('_', "........................................####.........##...........................#........................................................................................................"),
-            ('8', "..............###......#######....#.....##..##.....##..##.....##..###....#....###..##.....#####.....##..###....#.....##..##......##.##......##.##......##..##....##...#######......####...."),
-            ('5', "............########...########...##.........##.........##.........##.........#####......#######.........##..........##.........##.........##.........##........##....#######.....####....."),
-            ('1', "........#......##..#......##..#...##.##..###.##.##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##......#######..."),
-            ('_', "..............................................................................................................................................................#..###......................."),
-            ('6', "................###......######....##........##.........#..........#.........##.####....#########..##.....##..##......##.##......##.##......##..#......##..##....##....######......####...."),
-            ('1', "...............##.........##......#####......#####.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##.........##......#######..."),
-            ('_', "...............................#..........##..............###.....##.###..................................................................................................................."),
-            ('2', "..............####.....########.........##..........##.........##.........##.........#.........##........##........###........##........##........##........##........#########..#########."),
-            ('_', "..............#...............................#...........#...........#.................#.................................................................................................."),
-        };
         // core icon colour histograms from the same screenshot (top row Upgrade Cores, bottom row Force Cores)
         public static readonly (string name, double[] f)[] Icons = {
             ("Upgrade Core (Ultimate)", new[] { 0.00, 0.00, 0.09, 7.50, 21.55, 6.09, 0.36, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 39.68, 8.18, 16.55 }),
@@ -447,38 +407,6 @@ namespace CAHelper
             for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) if (Dark(img, x + dx, y + dy)) return true;
             return false;
         }
-        /// Cleans an (enlarged) count strip for the text reader: dark digits on white. Keeps only bright, uncoloured
-        /// pixels that have a dark pixel within reach, i.e. the outlined count text; the icon's shine is bright but
-        /// has no outline and is dropped. `enlarge` is the strip's enlargement factor (outline reach scales with it).
-        public static Img CleanDigits(Img src, int enlarge)
-        {
-            int W = src.W, H = src.H, reach = 2 * enlarge;
-            var white = new bool[W * H]; var dark = new bool[W * H];
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    src.Rgb(x, y, out int r, out int g, out int b);
-                    int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b));
-                    white[y * W + x] = mn >= 150 && mx - mn < 70;
-                    dark[y * W + x] = mx < 80;
-                }
-            var outPx = new byte[W * H * 4];
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    bool keep = false;
-                    if (white[y * W + x])
-                        for (int dy = -reach; dy <= reach && !keep; dy++)
-                            for (int dx = -reach; dx <= reach; dx++)
-                            {
-                                int nx = x + dx, ny = y + dy;
-                                if (nx >= 0 && ny >= 0 && nx < W && ny < H && dark[ny * W + nx]) { keep = true; break; }
-                            }
-                    byte v = keep ? (byte)0 : (byte)255; int i = (y * W + x) * 4;
-                    outPx[i] = outPx[i + 1] = outPx[i + 2] = v; outPx[i + 3] = 255;
-                }
-            return new Img(W, H, outPx);
-        }
 
         /// The count's digit glyphs in a slot's digit band: outlined white shapes of digit height, chained from the
         /// right edge leftwards (counts are right-aligned). Icon remains are farther left or the wrong height.
@@ -534,91 +462,6 @@ namespace CAHelper
             return chain;
         }
 
-        /// Where the count sits in a digit band: anchored on the rightmost clean digit glyph (the last digit never
-        /// touches the icon), then fixed digit cells leftwards while each cell still holds a digit: enough outlined
-        /// white pixels, looking like a digit shape, with a near-black outline and no colour tint (icon remains are
-        /// tinted, grey-outlined and match no digit). Returns the cells, left to right.
-        public static List<Rectangle> CountCells(Img band, double scale, IList<(char d, string cell)> templates)
-        {
-            var glyphs = CountGlyphs(band, scale);
-            if (glyphs.Count == 0) return new List<Rectangle>();
-            var last = glyphs[glyphs.Count - 1];
-            int cw = (int)Math.Round(CW * scale), ch = (int)Math.Round(CH * scale);
-            int right = last.Right, bottom = Math.Max(last.Bottom, ch);
-            var cells = new List<Rectangle>();
-            for (int k = 0; k < 5; k++)
-            {
-                var cell = new Rectangle(right - (k + 1) * cw, bottom - ch, cw, ch);
-                if (cell.X < -cw / 2) break;
-                if (!CellIsDigit(band, cell, templates)) break;
-                cells.Insert(0, cell);
-            }
-            return cells;
-        }
-
-        public static bool CellIsDigit(Img band, Rectangle cell, IList<(char d, string cell)> templates)
-        {
-            int px = 0; double sat = 0, darkSum = 0; int darkN = 0;
-            var chars = new char[CW * CH];
-            for (int y = 0; y < CH; y++)
-                for (int x = 0; x < CW; x++)
-                {
-                    int bx = cell.X + x * cell.Width / CW, by = cell.Y + y * cell.Height / CH;
-                    bool d = DigitPx(band, bx, by);
-                    chars[y * CW + x] = d ? '#' : '.';
-                    if (!d) continue;
-                    px++;
-                    band.Rgb(bx, by, out int r, out int g, out int b);
-                    sat += Math.Max(r, Math.Max(g, b)) - Math.Min(r, Math.Min(g, b));
-                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
-                    {
-                        band.Rgb(bx + dx, by + dy, out int nr, out int ng, out int nb);
-                        int mx = Math.Max(nr, Math.Max(ng, nb));
-                        if (mx < 80) { darkSum += mx; darkN++; }
-                    }
-                }
-            if (px < 6) return false;
-            // (A colour/outline rule was tried here and rejected real digits over a bright icon shine; the shape match
-            // alone tells digits from icon remains.)
-            var best = templates.Where(t => t.d != '_').Min(t => CellDist(new string(chars), t.cell));
-            return best <= DigitMatchMax;
-        }
-
-        /// Reads a count from its cells with the shape templates.
-        public static int? ReadCountFromCells(Img band, IList<Rectangle> cells, IList<(char d, string cell)> templates)
-        {
-            if (cells.Count == 0) return null;
-            var digits = new StringBuilder();
-            foreach (var cell in cells)
-            {
-                var chars = new char[CW * CH];
-                for (int y = 0; y < CH; y++) for (int x = 0; x < CW; x++) chars[y * CW + x] = DigitPx(band, cell.X + x * cell.Width / CW, cell.Y + y * cell.Height / CH) ? '#' : '.';
-                var best = templates.Where(t => t.d != '_').Select(t => (t.d, dist: CellDist(new string(chars), t.cell))).OrderBy(t => t.dist).First();
-                if (best.dist > DigitMatchMax) return null;
-                digits.Append(best.d);
-            }
-            return int.Parse(digits.ToString(), CultureInfo.InvariantCulture);
-        }
-
-        /// Reads a count from its glyph boxes with the shape templates: each glyph is placed in a cell aligned
-        /// to its own bottom-right corner, so the fixed cell positions no longer matter.
-        public static int? ReadCountFromGlyphs(Img band, IList<Rectangle> glyphs, IList<(char d, string cell)> templates)
-        {
-            if (glyphs.Count == 0) return null;
-            var digits = new StringBuilder();
-            foreach (var gl in glyphs)
-            {
-                var chars = new char[CW * CH];
-                int cx = gl.Right - CW + 1, cy = gl.Bottom - CH + 1;            // glyph's bottom-right in the cell's bottom-right
-                for (int y = 0; y < CH; y++) for (int x = 0; x < CW; x++) chars[y * CW + x] = DigitPx(band, cx + x, cy + y) ? '#' : '.';
-                string cell = new string(chars);
-                var best = templates.Where(t => t.d != '_').Select(t => (t.d, dist: CellDist(cell, t.cell))).OrderBy(t => t.dist).First();
-                if (best.dist > DigitMatchMax) return null;
-                digits.Append(best.d);
-            }
-            return int.Parse(digits.ToString(), CultureInfo.InvariantCulture);
-        }
-
         /// The strip of a slot where its stack count is drawn (image coordinates), for the text reader.
         public static Rectangle DigitBand(Grid g, int r, int c)
         {
@@ -645,59 +488,6 @@ namespace CAHelper
             return result;
         }
 
-        public static bool DigitPxPublic(Img img, int x, int y) => DigitPx(img, x, y);
-
-        public static string Cell(Img img, Grid g, int r, int c, int i)
-        {
-            var (sx, sy) = SlotOrigin(g, r, c); double s = g.Scale;
-            var chars = new char[CW * CH];
-            for (int y = 0; y < CH; y++)
-                for (int x = 0; x < CW; x++)
-                {
-                    int px = sx + (int)Math.Round((DigitRight - (i + 1) * CW + x) * s), py = sy + (int)Math.Round((DigitTop + y) * s);
-                    chars[y * CW + x] = DigitPx(img, px, py) ? '#' : '.';
-                }
-            return new string(chars);
-        }
-        /// Hamming distance allowing up to 2 px of shift.
-        public static int CellDist(string a, string b)
-        {
-            int best = int.MaxValue;
-            for (int dy = -2; dy <= 2; dy++)
-                for (int dx = -2; dx <= 2; dx++)
-                {
-                    int d = 0;
-                    for (int y = 0; y < CH; y++)
-                        for (int x = 0; x < CW; x++)
-                        {
-                            int sx = x - dx, sy = y - dy;
-                            char ca = sx >= 0 && sy >= 0 && sx < CW && sy < CH ? a[sy * CW + sx] : '.';
-                            if (ca != b[y * CW + x]) d++;
-                        }
-                    if (d < best) best = d;
-                }
-            return best;
-        }
-        public const int DigitMatchMax = 21;   // same digit <= 16, closest different digits 26 on the test screenshot
-
-        /// Reads a stack count from the slot's digit band: cells anchored on the last digit, matched by shape.
-        /// null = a cell didn't match any digit (e.g. an unlearned glyph); 1 = no count drawn (single item).
-        public static int? ReadCount(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, List<string> cellsOut)
-        {
-            var band = CropImg(img, DigitBand(g, r, c));
-            var cells = CountCells(band, g.Scale, templates);
-            if (cells.Count == 0) return CountGlyphs(band, g.Scale).Count == 0 ? 1 : (int?)null;
-            foreach (var cell in cells)
-            {
-                var chars = new char[CW * CH];
-                for (int y = 0; y < CH; y++) for (int x = 0; x < CW; x++) chars[y * CW + x] = DigitPx(band, cell.X + x * cell.Width / CW, cell.Y + y * cell.Height / CH) ? '#' : '.';
-                cellsOut?.Add(new string(chars));
-            }
-            return ReadCountFromCells(band, cells, templates);
-        }
-
-        /// The count region of a slot for the text reader: only the validated digit cells, as dark digits on white.
-        /// Returns null when the band holds no readable count. cellCount = how many digits the reader must return.
         /// Where the count sits in a digit band, without any font knowledge: anchored on the rightmost digit-sized
         /// glyph (counts are right-aligned and the last digit never touches the icon) and extending left by up to
         /// five digit widths, where a digit width is taken from the glyph's own height. null = no glyph at all.
@@ -733,28 +523,6 @@ namespace CAHelper
             return int.Parse(fixedUp.Substring(start, end - start), CultureInfo.InvariantCulture);
         }
 
-        /// raw = true: the original pixels of the digit cells (the reader copes with light text on the icon; the
-        /// outline mask would erase digit parts whose outline is lit by the icon). raw = false: outlined pixels only.
-        public static Img CountStrip(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, out int cellCount, bool raw = true)
-        {
-            var band = CropImg(img, DigitBand(g, r, c));
-            var cells = CountCells(band, g.Scale, templates);
-            cellCount = cells.Count;
-            if (cells.Count == 0) return null;
-            var region = cells.Aggregate(Rectangle.Union);
-            region.Inflate(2, 2);
-            region = Rectangle.Intersect(region, new Rectangle(0, 0, band.W, band.H));
-            if (raw) return CropImg(band, region);
-            var px = new byte[region.Width * region.Height * 4];
-            for (int y = 0; y < region.Height; y++)
-                for (int x = 0; x < region.Width; x++)
-                {
-                    byte v = DigitPx(band, region.X + x, region.Y + y) ? (byte)0 : (byte)255;
-                    int i = (y * region.Width + x) * 4; px[i] = px[i + 1] = px[i + 2] = v; px[i + 3] = 255;
-                }
-            return new Img(region.Width, region.Height, px);
-        }
-
         public static Img CropImg(Img im, Rectangle r)
         {
             r = Rectangle.Intersect(r, new Rectangle(0, 0, im.W, im.H));
@@ -767,7 +535,9 @@ namespace CAHelper
         /// little on every read); entering a new identity needs the strict match.
         public const double IconStayMax = 2.2;
 
-        public static List<SlotRead> ReadInventory(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, int cols = 8, int rows = 8, IDictionary<(int r, int c), string> prior = null)
+        /// Recognises the cores in the grid by their icons. Counts are left to the text reader (Count = null);
+        /// GlyphCount says how many digit-sized glyphs sit in each slot's count band.
+        public static List<SlotRead> ReadInventory(Img img, Grid g, IList<(string name, double[] f)> icons, int cols = 8, int rows = 8, IDictionary<(int r, int c), string> prior = null)
         {
             var list = new List<SlotRead>();
             for (int r = 0; r < rows; r++)
@@ -784,14 +554,12 @@ namespace CAHelper
                     if (m == null || empty < m.Value.d) continue;                   // empty slot, unknown item, or ambiguous
                     var best = m.Value;
                     var s = new SlotRead { Row = r, Col = c, Item = best.name, IconDist = best.d };
-                    s.Count = ReadCount(img, g, r, c, digits, s.Cells);
+                    s.GlyphCount = CountGlyphs(CropImg(img, DigitBand(g, r, c)), g.Scale).Count;
                     list.Add(s);
                 }
             return list;
         }
 
-        /// The slot frame has two bright lines ~8 px apart, so the snap can land on either one. Try the neighbours
-        /// and keep the grid that reads best: most recognised cores, fewest unreadable counts, closest icons.
         // ---------- fixed UI anchors: the sword button under the inventory and the window's close cross ----------
         // Grey-level templates cut from a live 2560x1440 capture (2026-09-29). Both never animate and are unique on screen.
         public const int ButtonW = 66, ButtonH = 56, CrossW = 18, CrossH = 18;
@@ -882,18 +650,15 @@ namespace CAHelper
             return g;
         }
 
-        /// Score of a read: recognised cores, counts that came from real digits, icon closeness.
-        public static double ReadScore(List<SlotRead> read)
-        {
-            int digitReads = read.Count(r => r.Count.HasValue && r.Cells.Count > 0);
-            return read.Count * 10 + digitReads * 8 - read.Sum(r => r.IconDist) - read.Count(r => r.Count == 1 && r.Cells.Count == 0) * 3;
-        }
+        /// Score of a read: recognised cores, slots whose count band holds digit glyphs, icon closeness.
+        public static double ReadScore(List<SlotRead> read) =>
+            read.Count * 10 + read.Count(r => r.GlyphCount > 0) * 8 - read.Sum(r => r.IconDist);
 
         /// The slot frame has two bright lines ~8 px apart, so the snap can land on either one. Try the neighbours
         /// and keep the grid that reads best. With `keep` set (the grid used last time), that grid stays unless
         /// another position reads clearly better (SwitchMargin), so the grid doesn't twitch between reads.
         public const double SwitchMargin = 12;
-        public static (Grid grid, List<SlotRead> slots) BestRead(Img img, Grid g, IList<(string name, double[] f)> icons, IList<(char d, string cell)> digits, Grid? keep = null)
+        public static (Grid grid, List<SlotRead> slots) BestRead(Img img, Grid g, IList<(string name, double[] f)> icons, Grid? keep = null)
         {
             (Grid, List<SlotRead>, double) best = (g, new List<SlotRead>(), double.MinValue);
             double step = SlotInset * g.Scale;
@@ -905,31 +670,13 @@ namespace CAHelper
             double keepScore = double.MinValue; List<SlotRead> keepRead = null;
             for (int i = 0; i < candidates.Count; i++)
             {
-                var read = ReadInventory(img, candidates[i], icons, digits);
+                var read = ReadInventory(img, candidates[i], icons);
                 double score = ReadScore(read);
                 if (i == 0 && keep != null) { keepScore = score; keepRead = read; }
                 if (score > best.Item3) best = (candidates[i], read, score);
             }
             if (keep != null && keepRead != null && best.Item3 < keepScore + SwitchMargin) return (keep.Value, keepRead);
             return (best.Item1, best.Item2);
-        }
-
-        /// Teaches digits from a count the player typed: pairs each digit cell (right to left) with the typed digit
-        /// and returns the cells that the current templates don't already match closely.
-        public static List<(char d, string cell)> LearnDigits(Img img, Grid g, int r, int c, int typed, IList<(char d, string cell)> templates)
-        {
-            var learned = new List<(char, string)>();
-            if (typed < 10 && typed <= 1) return learned;             // "1" has no number drawn
-            string t = typed.ToString(CultureInfo.InvariantCulture);
-            for (int i = 0; i < t.Length; i++)
-            {
-                char d = t[t.Length - 1 - i];
-                string cell = Cell(img, g, r, c, i);
-                if (cell.Count(ch => ch == '#') < 6) break;
-                var near = templates.Where(x => x.d == d).Select(x => CellDist(cell, x.cell)).DefaultIfEmpty(int.MaxValue).Min();
-                if (near > 8) learned.Add((d, cell));
-            }
-            return learned;
         }
 
         /// Smooths inventory reads over time: a stack count is the most common value of the last few reads,
@@ -943,8 +690,8 @@ namespace CAHelper
 
             public void Clear() { recent.Clear(); missingStreak.Clear(); everSeen.Clear(); }
 
-            /// Feed one read (name -> count for the cores found in it). Counts in `confident` (both readers agreed)
-            /// replace that core's history, so they show at once; other values still need the recent majority.
+            /// Feed one read (name -> count for the cores found in it). Counts in `confident` (every stack read by the
+            /// text reader this time) replace that core's history, so they show at once; others need the recent majority.
             public void Add(IDictionary<string, int> read, ICollection<string> confident = null)
             {
                 foreach (var kv in read)

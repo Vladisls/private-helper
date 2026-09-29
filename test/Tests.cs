@@ -193,18 +193,22 @@ static class T {
       var inv = Load(System.IO.Path.Combine(dataDir, "inv.bin"));
       var end = Load(System.IO.Path.Combine(dataDir, "end.bin"));
       var tmr = Load(System.IO.Path.Combine(dataDir, "timer.bin"));
-      var icons = FarmCheck.Icons.ToList(); var digs = FarmCheck.Digits.ToList();
-      string expect = "Upgrade Core (Ultimate)=3,Upgrade Core (Highest)=208,Upgrade Core (High)=144,Upgrade Core (Medium)=14,Upgrade Core (Low)=9,Force Core (Ultimate)=5,Force Core (Highest)=34,Force Core (High)=158,Force Core (Medium)=16,Force Core (Low)=2";
+      var icons = FarmCheck.Icons.ToList();
+      // counts come from the text reader only (not run here): check the recognised cores, in order, and that every
+      // core slot has count glyphs for the reader
+      string expect = "Upgrade Core (Ultimate),Upgrade Core (Highest),Upgrade Core (High),Upgrade Core (Medium),Upgrade Core (Low),Force Core (Ultimate),Force Core (Highest),Force Core (High),Force Core (Medium),Force Core (Low)";
       foreach (var (bx,by,bw,bh) in new[]{ (1912,248,612,612), (1905,240,620,615), (1918,255,608,608), (1900,245,616,612) }) {
         var g = FarmCheck.FindGrid(inv, bx, by, bw, bh);
-        var got = string.Join(",", FarmCheck.BestRead(inv, g, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
-        Check(got == expect, $"inventory read from a rough box {bx},{by}: grid {g.X},{g.Y} pitch {g.PitchX:0.00} -> {got}");
+        var rd0 = FarmCheck.BestRead(inv, g, icons).slots;
+        var got = string.Join(",", rd0.Select(x => x.Item));
+        Check(got == expect && rd0.All(x => x.GlyphCount > 0), $"inventory read from a rough box {bx},{by}: grid {g.X},{g.Y} pitch {g.PitchX:0.00} -> {got}; glyphs " + string.Join(",", rd0.Select(x => x.GlyphCount)));
       }
       // boxes around the WHOLE inventory window, as a player might drag them
       foreach (var (bx,by,bw,bh) in new[]{ (1890,130,660,900), (1880,180,670,720), (1895,230,640,640) }) {
         var gw = FarmCheck.FindGrid(inv, bx, by, bw, bh);
-        var gotw = string.Join(",", FarmCheck.BestRead(inv, gw, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
-        Check(gotw == expect && Math.Abs(gw.X - 1919) <= 3 && Math.Abs(gw.Y - 253) <= 3, $"inventory read from a whole-window box {bx},{by},{bw}x{bh}: grid {gw.X:0},{gw.Y:0} pitch {gw.PitchX:0.00}");
+        var rdw = FarmCheck.BestRead(inv, gw, icons).slots;
+        var gotw = string.Join(",", rdw.Select(x => x.Item));
+        Check(gotw == expect && rdw.All(x => x.GlyphCount > 0) && Math.Abs(gw.X - 1919) <= 3 && Math.Abs(gw.Y - 253) <= 3, $"inventory read from a whole-window box {bx},{by},{bw}x{bh}: grid {gw.X:0},{gw.Y:0} pitch {gw.PitchX:0.00}");
       }
       // search the whole screen, as after a reset when the saved area is wrong
       var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -235,13 +239,6 @@ static class T {
       Check(FarmCheck.InventoryOpen(inv, gi) && !FarmCheck.InventoryOpen(end, gi) && !FarmCheck.InventoryOpen(tmr, gi), "inventory-open check: yes on the inventory shot, no on the others");
       Check(FarmCheck.EndWindowLikely(Crop(end, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(tmr, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(inv, 209, 284, 630, 745)),
             "end-window trigger: yes on the end window, no in dungeon or with inventory");
-      var no3 = digs.Where(d => d.d != '3').ToList();
-      var (gl, before) = FarmCheck.BestRead(inv, gi, icons, no3);
-      var s3 = before.First(x => x.Item == "Upgrade Core (Ultimate)");
-      var learned3 = FarmCheck.LearnDigits(inv, gl, s3.Row, s3.Col, 3, no3);
-      var after = FarmCheck.BestRead(inv, gl, icons, no3.Concat(learned3).ToList()).slots;
-      Check(s3.Count == null && learned3.Count == 1 && after.First(x => x.Item == "Upgrade Core (Ultimate)").Count == 3 && after.First(x => x.Item == "Force Core (Highest)").Count == 34,
-            "typing a count teaches an unknown digit (3 hidden, then learned: 3 and 34 read again)");
       var ft = System.IO.Path.Combine(dataDir, "tab1.bin");
       if (System.IO.File.Exists(ft)) {
         var t1 = Load(ft);
@@ -261,13 +258,10 @@ static class T {
         for (int y = 0; y < live.H; y++) { int n = 0; for (int x = 0; x < live.W; x++) { live.Rgb(x, y, out int r, out int g, out int b); if (g > 200 && r < 60 && b < 60) n++; } if (n > 300) gy.Add(y); }
         Console.WriteLine("INFO green lines x: " + string.Join(" ", gx) + " | y: " + string.Join(" ", gy));
         var glb = new Grid { X = gx.First(), Y = gy.First(), PitchX = (gx.Last() - gx.First()) / 8.0, PitchY = (gy.Last() - gy.First()) / 8.0 };
-        var lr = FarmCheck.ReadInventory(live, glb, icons, digs);
-        Console.WriteLine("INFO live capture: grid " + $"{glb.X:0},{glb.Y:0} pitch {glb.PitchX:0.00}: " + string.Join(",", lr.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?"))));
-        var hi = lr.First(x => x.Item == "Upgrade Core (High)");
-        Check(hi.Count == 172, $"live capture: Upgrade Core (High) reads 172 with the new 7 (got {hi.Count?.ToString() ?? "?"})");
-        var seven = FarmCheck.Digits.First(d => d.d == '7').cell;
-        int nearestOther = FarmCheck.Digits.Where(d => d.d != '7' && d.d != '_').Min(d => FarmCheck.CellDist(seven, d.cell));
-        Check(nearestOther > FarmCheck.DigitMatchMax, $"7 doesn't clash with other digits (nearest other digit {nearestOther}, limit {FarmCheck.DigitMatchMax})");
+        var lr = FarmCheck.ReadInventory(live, glb, icons);
+        Console.WriteLine("INFO live capture: grid " + $"{glb.X:0},{glb.Y:0} pitch {glb.PitchX:0.00}: " + string.Join(",", lr.Select(x => x.Item + " glyphs " + x.GlyphCount)));
+        var hi = lr.FirstOrDefault(x => x.Item == "Upgrade Core (High)");
+        Check(hi != null && hi.GlyphCount > 0, $"live capture: Upgrade Core (High) (172) found with count glyphs (got {hi?.GlyphCount.ToString() ?? "none"})");
       }
       var ffc = System.IO.Path.Combine(dataDir, "livefc.bin");
       if (System.IO.File.Exists(ffc)) {
@@ -281,19 +275,17 @@ static class T {
           var ds = FarmCheck.Icons.Select(t => (t.name, d: FarmCheck.Dist(f, t.f))).OrderBy(t => t.d).ToList();
           Console.WriteLine($"LIVE {name}: nearest {ds[0].name} {ds[0].d:0.00}, 2nd {ds[1].name} {ds[1].d:0.00}; empty {FarmCheck.Dist(f, FarmCheck.EmptySlot):0.00}");
         }
-        var liveRead = FarmCheck.ReadInventory(lv, lg, FarmCheck.DefaultIcons(), digs);
-        Check(liveRead.Any(x => x.Item == "Force Core (Medium)" && x.Count == 16) && liveRead.Any(x => x.Item == "Force Core (Low)" && x.Count == 2), "live capture: FC Medium 16 and FC Low 2 found with the live icons");
-        {
-        }
+        var liveRead = FarmCheck.ReadInventory(lv, lg, FarmCheck.DefaultIcons());
+        Check(liveRead.Any(x => x.Item == "Force Core (Medium)" && x.GlyphCount > 0) && liveRead.Any(x => x.Item == "Force Core (Low)" && x.GlyphCount > 0), "live capture: FC Medium (16) and FC Low (2) found with the live icons, with their count glyphs");
       }
       var fmis = System.IO.Path.Combine(dataDir, "mis.bin");
       if (System.IO.File.Exists(fmis)) {
         var mi = Load(fmis);
         foreach (var ep in new[]{ 0.0 }) {
           var gm = FarmCheck.FindGrid(mi, 815, 160, 620, 620, 8, 8, ep);
-          var rm = FarmCheck.BestRead(mi, gm, FarmCheck.DefaultIcons(), digs);
+          var rm = FarmCheck.BestRead(mi, gm, FarmCheck.DefaultIcons());
           Check(Math.Abs(gm.PitchX - 76.9) < 1 && Math.Abs(gm.X - 820) <= 3 && Math.Abs(gm.Y - 166) <= 3, "live screenshot: grid found without a resolution guess");
-          Console.WriteLine($"MIS expected {ep}: grid {gm.X:0},{gm.Y:0} pitch {gm.PitchX:0.00}x{gm.PitchY:0.00} contrast {gm.Score:0.00} weakest {FarmCheck.WeakestLine(mi, gm):0.0} -> " + string.Join(",", rm.slots.Select(x => FarmCheck.Icons.First(t => t.name == x.Item).name.Replace("Upgrade Core","UC").Replace("Force Core","FC") + "=" + (x.Count?.ToString() ?? "?"))));
+          Console.WriteLine($"MIS expected {ep}: grid {gm.X:0},{gm.Y:0} pitch {gm.PitchX:0.00}x{gm.PitchY:0.00} contrast {gm.Score:0.00} weakest {FarmCheck.WeakestLine(mi, gm):0.0} -> " + string.Join(",", rm.slots.Select(x => x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC") + " g" + x.GlyphCount)));
         }
       }
       // Shine / similarity study on the two live captures (all icons clean on mis.bin, FC Medium+Low clean on livefc.bin)
@@ -312,60 +304,24 @@ static class T {
         double minDiff = 99; string pair = "";
         for (int i = 0; i < 10; i++) for (int j = i + 1; j < 10; j++) { double d = FarmCheck.Dist(live[i].f, live[j].f); if (d < minDiff) { minDiff = d; pair = live[i].name + " vs " + live[j].name; } }
         Console.WriteLine($"STUDY closest two different cores (live): {minDiff:0.00} ({pair}); UC Ult vs UC Highest {FarmCheck.Dist(live[0].f, live[1].f):0.00}; FC Ult vs FC Highest {FarmCheck.Dist(live[5].f, live[6].f):0.00}; UC Ult vs FC Ult {FarmCheck.Dist(live[0].f, live[5].f):0.00}; UC Highest vs FC Highest {FarmCheck.Dist(live[1].f, live[6].f):0.00}");
-        var liveRead2 = FarmCheck.BestRead(mi2, gm2, FarmCheck.DefaultIcons(), digs).slots;
-        string gotLive = string.Join(",", liveRead2.OrderBy(x => x.Row * 8 + x.Col).Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
-        Check(gotLive == "Upgrade Core (Ultimate)=3,Upgrade Core (Highest)=223,Upgrade Core (High)=172,Upgrade Core (Medium)=14,Upgrade Core (Low)=9,Force Core (Ultimate)=5,Force Core (Highest)=34,Force Core (High)=158,Force Core (Medium)=16,Force Core (Low)=2",
-              "live Debug capture: all 10 cores and counts with the default icons -> " + gotLive);
+        var liveRead2 = FarmCheck.BestRead(mi2, gm2, FarmCheck.DefaultIcons()).slots.OrderBy(x => x.Row * 8 + x.Col).ToList();
+        string gotLive = string.Join(",", liveRead2.Select(x => x.Item));
+        Check(gotLive == expect && liveRead2.All(x => x.GlyphCount > 0), "live Debug capture: all 10 cores with count glyphs, with the default icons -> " + gotLive);
         foreach (var l in live) { var m = FarmCheck.MatchIcon(l.f, FarmCheck.DefaultIcons()); Check(m != null && m.Value.name == l.name && m.Value.d < 0.01, "live icon matches its own core unambiguously: " + l.name); }
       }
-      // grid picker must prefer the grid that reads real digits over a shifted one that reads "1"s
-      { var gOk = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var (gPick, sPick) = FarmCheck.BestRead(inv, gOk, icons, digs);
-        Check(sPick.Count(x => x.Cells.Count > 0) == 10 && sPick.All(x => x.Count > 1 || x.Cells.Count > 0), "grid picker keeps the alignment where counts come from real digits"); }
-      // glyph-based count reading on both captures (JPG screenshot and live PNG)
-      foreach (var (label, im, box) in new[]{ ("screenshot", inv, (1912,248,612,612)), ("live", Load(fmis), (815,160,620,620)) }) {
-        var gg = FarmCheck.BestRead(im, FarmCheck.FindGrid(im, box.Item1, box.Item2, box.Item3, box.Item4), FarmCheck.DefaultIcons(), digs);
-        var outp = new List<string>(); int okc = 0;
-        foreach (var sl in gg.slots.OrderBy(x => x.Row * 8 + x.Col)) {
-          var br = FarmCheck.DigitBand(gg.grid, sl.Row, sl.Col); var bi = Crop(im, br.X, br.Y, br.Width, br.Height);
-          var glyphs = FarmCheck.CountCells(bi, gg.grid.Scale, digs); var v = FarmCheck.ReadCountFromCells(bi, glyphs, digs);
-          outp.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: {glyphs.Count} cells -> {(v?.ToString() ?? "?")} (fixed {sl.Count?.ToString() ?? "?"})");
-          if (v == sl.Count && v.HasValue) okc++;
-        }
-        Console.WriteLine($"GLYPH {label}: " + string.Join(" | ", outp));
-        foreach (var name in new string[0]) {
-          var sl = gg.slots.First(x => x.Item == name); var br = FarmCheck.DigitBand(gg.grid, sl.Row, sl.Col); var bi = Crop(im, br.X, br.Y, br.Width, br.Height);
-          var sb = new System.Text.StringBuilder();
-          for (int y = 0; y < bi.H; y++) { for (int x = 0; x < bi.W; x++) sb.Append(FarmCheck.DigitPxPublic(bi, x, y) ? '#' : '.'); sb.Append('\n'); }
-          var glyphs2 = FarmCheck.CountGlyphs(bi, gg.grid.Scale);
-          var descr = new List<string>();
-          foreach (var r in FarmCheck.LastComponents.Where(r => r.Height >= 8)) {
-            double cwr = 0, cwg = 0, cwb = 0, cwn = 0, cdr = 0, cdg = 0, cdb = 0, cdn = 0, csat = 0;
-            for (int y = r.Y; y < r.Bottom; y++) for (int x = r.X; x < r.Right; x++) {
-              bi.Rgb(x, y, out int R, out int G, out int B); int mx = Math.Max(R, Math.Max(G, B)), mn = Math.Min(R, Math.Min(G, B));
-              if (FarmCheck.DigitPxPublic(bi, x, y)) { cwr += R; cwg += G; cwb += B; cwn++; csat += mx - mn; }
-              else if (mx < 80) { cdr += R; cdg += G; cdb += B; cdn++; }
-            }
-            descr.Add($"[{r.X}-{r.Right - 1} h{r.Height}] white avg ({cwr / cwn:0},{cwg / cwn:0},{cwb / cwn:0}) sat {csat / cwn:0.0} | dark avg ({(cdn > 0 ? cdr / cdn : 0):0},{(cdn > 0 ? cdg / cdn : 0):0},{(cdn > 0 ? cdb / cdn : 0):0}) n{cdn}");
-          }
-          Console.WriteLine($"COMP {label} {name}: " + string.Join("  ||  ", descr));
-        }
-        Check(okc == 10, $"{label}: anchored cells read all 10 counts ({okc}/10)");
-      }
-      { var gS = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons(), digs);
-        var hi = gS.slots.First(x => x.Item == "Force Core (High)");
-        var strip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out int nCells, raw: false); var rawStrip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out _);
-        int darkPx = 0; for (int i = 0; i < strip.Px.Length; i += 4) if (strip.Px[i] == 0) darkPx++;
-        Check(nCells == 3 && strip.W > 25 && strip.W < 40 && darkPx > 60 && rawStrip.W == strip.W && rawStrip.H == strip.H, $"count strip for the reader: 3 cells, {strip.W}x{strip.H}, {darkPx} digit pixels (cleaned), raw strip same size"); }
+      // grid picker must prefer the grid where every core slot has count glyphs
+      { var gOk = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var (gPick, sPick) = FarmCheck.BestRead(inv, gOk, icons);
+        Check(sPick.Count == 10 && sPick.All(x => x.GlyphCount > 0), "grid picker keeps the alignment where every core slot has count glyphs"); }
       // hysteresis: the grid used last time is kept unless another position reads clearly better
-      { var g0 = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var first = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), digs);
+      { var g0 = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var first = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons());
         var nudged = g0; nudged.X += 3; nudged.Y -= 2;                       // a slightly different snap on the next read
-        var again = FarmCheck.BestRead(inv, nudged, FarmCheck.DefaultIcons(), digs, keep: first.grid);
+        var again = FarmCheck.BestRead(inv, nudged, FarmCheck.DefaultIcons(), keep: first.grid);
         Check(again.grid.X == first.grid.X && again.grid.Y == first.grid.Y && again.slots.Count == 10, "grid is kept between reads when the new snap differs slightly");
         var badKeep = first.grid; badKeep.X -= 8 * badKeep.Scale; badKeep.Y -= 8 * badKeep.Scale;   // a previously kept grid that reads badly
-        var fixedUp = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), digs, keep: badKeep);
-        Check(fixedUp.slots.Count(x => x.Cells.Count > 0) >= 9, "a kept grid that reads badly is replaced by a clearly better one"); }
+        var fixedUp = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), keep: badKeep);
+        Check(fixedUp.slots.Count(x => x.GlyphCount > 0) >= 9, "a kept grid that reads badly is replaced by a clearly better one"); }
       // button/cross anchor on every capture
-      foreach (var (nm, file, box, expect10) in new[]{ ("inv", "inv.bin", (1912,248,612,612), "3,208,144,14,9,5,34,158,16,2"), ("mis", "mis.bin", (815,160,620,620), "3,223,172,14,9,5,34,158,16,2"), ("off", "off.bin", (487,143,658,642), null) }) {
+      foreach (var (nm, file, box, expect10) in new[]{ ("inv", "inv.bin", (1912,248,612,612), expect), ("mis", "mis.bin", (815,160,620,620), expect), ("off", "off.bin", (487,143,658,642), null) }) {
         var fpath = System.IO.Path.Combine(dataDir, file); if (!System.IO.File.Exists(fpath)) continue;
         var cim = nm == "inv" ? inv : Load(fpath);
         var snap = FarmCheck.FindGrid(cim, box.Item1, box.Item2, box.Item3, box.Item4);
@@ -374,18 +330,18 @@ static class T {
         var swB = System.Diagnostics.Stopwatch.StartNew(); var byBtn = FarmCheck.LocateByButton(cim, 1.0, out double dBtn); long msBtn = swB.ElapsedMilliseconds;
         Console.WriteLine($"ANCHOR {nm}: snap {snap.X:0},{snap.Y:0}; from a wrong snap -> {infoA}; whole-image locate by button -> {(byBtn.HasValue ? $"{byBtn.Value.X:0},{byBtn.Value.Y:0}" : "none")} (diff {dBtn:0.0}, {msBtn} ms)");
         if (expect10 != null) {
-          var read = FarmCheck.ReadInventory(cim, anchored, FarmCheck.DefaultIcons(), digs).OrderBy(x => x.Row * 8 + x.Col).ToList();
-          string got = string.Join(",", read.Select(x => x.Count?.ToString() ?? "?"));
-          Check(okA && got == expect10, $"{nm}: grid anchored on the button reads all counts ({got})");
+          var read = FarmCheck.ReadInventory(cim, anchored, FarmCheck.DefaultIcons()).OrderBy(x => x.Row * 8 + x.Col).ToList();
+          string got = string.Join(",", read.Select(x => x.Item));
+          Check(okA && got == expect10 && read.All(x => x.GlyphCount > 0), $"{nm}: grid anchored on the button finds all 10 cores with count glyphs ({got})");
           Check(byBtn.HasValue && Math.Abs(byBtn.Value.X - anchored.X) <= 2 && Math.Abs(byBtn.Value.Y - anchored.Y) <= 2, $"{nm}: locating by the button alone finds the same grid");
         } else Check(okA && Math.Abs(anchored.X - 506) <= 2 && Math.Abs(anchored.Y - 158) <= 2, $"{nm}: anchored grid matches the frame snap 506,158 ({anchored.X:0},{anchored.Y:0})");
       }
       // sticky identity: a slot keeps its core when the icon drifts past the strict limit but still resembles it
-      { var gS2 = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons(), digs);
+      { var gS2 = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons());
         var prior = gS2.slots.ToDictionary(x => (x.Row, x.Col), x => x.Item);
         var strictIcons = FarmCheck.DefaultIcons().Where(t => t.name != "Force Core (Low)").Concat(new[]{ ("Force Core (Low)", FarmCheck.Icons.First(t => t.name == "Force Core (Low)").f) }).ToList();   // only the JPG sample: live FC Low sits ~2.0 away
-        var without = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons, digs);
-        var withPrior = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons, digs, 8, 8, prior);
+        var without = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons);
+        var withPrior = FarmCheck.ReadInventory(inv, gS2.grid, strictIcons, 8, 8, prior);
         Console.WriteLine($"STICKY without prior: {without.Count} slots, with prior: {withPrior.Count} slots");
         Check(withPrior.Count >= without.Count && withPrior.Any(x => x.Item == "Force Core (Low)"), "a previously identified slot stays identified when its icon drifts"); }
       // live 2.9.8 frame where most counts showed "?": reproduce the read
@@ -395,50 +351,37 @@ static class T {
         var gq = FarmCheck.LocateByButton(q, 1.0, out double qd);
         Console.WriteLine($"Q locate by button: {(gq.HasValue ? $"{gq.Value.X:0},{gq.Value.Y:0}" : "none")} diff {qd:0.0}");
         if (gq.HasValue) {
-          var rq = FarmCheck.ReadInventory(q, gq.Value, FarmCheck.DefaultIcons(), digs).OrderBy(x => x.Row * 8 + x.Col).ToList();
-          Console.WriteLine("Q read: " + string.Join(" | ", rq.Select(x => $"{x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}={(x.Count?.ToString() ?? "?")} d{x.IconDist:0.00}")));
-          Check(rq.Any(x => x.Item == "Upgrade Core (Low)" && x.Count == 9) && rq.Any(x => x.Item == "Upgrade Core (High)" && x.Count == 209), "live frame with bright shine: 9 and 209 read");
-          // distances of the failing cells, and live digit cells with their known values for new templates
-          var dumps = new List<string>();
-          foreach (var (nm2, truth) in new[]{ ("Upgrade Core (Low)", "9"), ("Upgrade Core (High)", "209"), ("Upgrade Core (Medium)", "14") }) {
-            var sl2 = rq.FirstOrDefault(x => x.Item == nm2); if (sl2 == null) continue;
-            var br2 = FarmCheck.DigitBand(gq.Value, sl2.Row, sl2.Col); var bi2 = Crop(q, br2.X, br2.Y, br2.Width, br2.Height);
-            var gl2 = FarmCheck.CountGlyphs(bi2, gq.Value.Scale);
-            int cw = 11, ch = 17; var lastG = gl2[gl2.Count - 1]; int rightG = lastG.Right, bottomG = Math.Max(lastG.Bottom, ch);
-            for (int k = 0; k < truth.Length; k++) {
-              var cell = new System.Drawing.Rectangle(rightG - (k + 1) * cw, bottomG - ch, cw, ch);
-              var chars = new char[cw * ch];
-              for (int y = 0; y < ch; y++) for (int x = 0; x < cw; x++) chars[y * cw + x] = FarmCheck.DigitPxPublic(bi2, cell.X + x, cell.Y + y) ? '#' : '.';
-              string cs = new string(chars); char truthD = truth[truth.Length - 1 - k];
-              var best = digs.Where(t => t.d != '_').Select(t => (t.d, dist: FarmCheck.CellDist(cs, t.cell))).OrderBy(t => t.dist).First();
-              var own = digs.Where(t => t.d == truthD).Select(t => FarmCheck.CellDist(cs, t.cell)).DefaultIfEmpty(-1).Min();
-              Console.WriteLine($"QCELL {nm2} digit '{truthD}': nearest template '{best.d}' at {best.dist}, own digit at {own}");
-              dumps.Add($"            ('{truthD}', \"{cs}\"),   // live 2026-09-29, {nm2}");
-            }
-          }
-          System.IO.File.WriteAllText("/tmp/live-digits.txt", string.Join("\n", dumps) + "\n");
-          foreach (var name in new[]{ "Upgrade Core (Low)", "Upgrade Core (High)", "Upgrade Core (Medium)" }) {
-            var sl = rq.FirstOrDefault(x => x.Item == name); if (sl == null) continue;
+          var rq = FarmCheck.ReadInventory(q, gq.Value, FarmCheck.DefaultIcons()).OrderBy(x => x.Row * 8 + x.Col).ToList();
+          Console.WriteLine("Q read: " + string.Join(" | ", rq.Select(x => $"{x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")} g{x.GlyphCount} d{x.IconDist:0.00}")));
+          // the bright-shine slots (9 and 209): the count region must cover the whole glyph chain
+          int okQ = 0; var infoQ = new List<string>();
+          foreach (var (nmq, digitsQ) in new[]{ ("Upgrade Core (Low)", 1), ("Upgrade Core (High)", 3) }) {
+            var sl = rq.FirstOrDefault(x => x.Item == nmq); if (sl == null) { infoQ.Add(nmq + ": not found"); continue; }
             var br = FarmCheck.DigitBand(gq.Value, sl.Row, sl.Col); var bi = Crop(q, br.X, br.Y, br.Width, br.Height);
-            var cells = FarmCheck.CountCells(bi, gq.Value.Scale, digs); var glyphs = FarmCheck.CountGlyphs(bi, gq.Value.Scale);
-            var sb = new System.Text.StringBuilder();
-            for (int y = 0; y < bi.H; y++) { for (int x = 0; x < bi.W; x++) sb.Append(FarmCheck.DigitPxPublic(bi, x, y) ? '#' : '.'); sb.Append('\n'); }
-            Console.WriteLine($"Q {name}: band {br.X},{br.Y} {br.Width}x{br.Height}; glyphs " + string.Join(" ", glyphs.Select(r => $"[{r.X}-{r.Right-1} y{r.Y}-{r.Bottom-1}]")) + "; cells " + string.Join(" ", cells.Select(r => $"[{r.X}-{r.Right-1} y{r.Y}-{r.Bottom-1}]")) + "\n" + sb);
+            var glyphs = FarmCheck.CountGlyphs(bi, gq.Value.Scale); var reg = FarmCheck.CountRegion(bi, gq.Value.Scale);
+            bool ok = glyphs.Count > 0 && reg.HasValue && reg.Value.X <= glyphs[glyphs.Count - 1].Right - digitsQ * 11 * gq.Value.Scale && reg.Value.X <= glyphs[0].X && reg.Value.Right >= glyphs[glyphs.Count - 1].Right && reg.Value.Y <= glyphs.Min(r => r.Y) && reg.Value.Bottom >= glyphs.Max(r => r.Bottom);
+            if (ok) okQ++;
+            infoQ.Add($"{nmq}: {glyphs.Count} glyphs " + string.Join(" ", glyphs.Select(r => $"[{r.X}-{r.Right - 1} y{r.Y}-{r.Bottom - 1}]")) + $", region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right} y{reg.Value.Y}-{reg.Value.Bottom}" : "none")}");
           }
+          Check(okQ == 2, "live frame with bright shine: the count region covers the glyph chain and all digits of 9 and 209 (" + string.Join("; ", infoQ) + ")");
         }
       }
       // generic count region: anchored on the last glyph, covers the whole count, on every capture
-      foreach (var (nm3, im3, box3, names3) in new[]{ ("inv", inv, (1912,248,612,612), "3,208,144,14,9,5,34,158,16,2"), ("mis", Load(fmis), (815,160,620,620), "3,223,172,14,9,5,34,158,16,2") }) {
-        var gr = FarmCheck.BestRead(im3, FarmCheck.FindGrid(im3, box3.Item1, box3.Item2, box3.Item3, box3.Item4), FarmCheck.DefaultIcons(), digs);
-        int okR = 0; var info = new List<string>();
+      foreach (var (nm3, im3, box3, digits3) in new[]{ ("inv", inv, (1912,248,612,612), "3,208,144,14,9,5,34,158,16,2"), ("mis", Load(fmis), (815,160,620,620), "3,223,172,14,9,5,34,158,16,2") }) {
+        var gr = FarmCheck.BestRead(im3, FarmCheck.FindGrid(im3, box3.Item1, box3.Item2, box3.Item3, box3.Item4), FarmCheck.DefaultIcons());
+        var lens = digits3.Split(',').Select(x => x.Length).ToList();
+        int okR = 0, k3 = 0; var info = new List<string>();
         foreach (var sl in gr.slots.OrderBy(x => x.Row * 8 + x.Col)) {
           var br = FarmCheck.DigitBand(gr.grid, sl.Row, sl.Col); var bi = Crop(im3, br.X, br.Y, br.Width, br.Height);
-          var reg = FarmCheck.CountRegion(bi, gr.grid.Scale); var cells = FarmCheck.CountCells(bi, gr.grid.Scale, digs);
-          bool covers = reg.HasValue && cells.Count > 0 && reg.Value.X <= cells[0].X + 2 && reg.Value.Right >= cells[cells.Count - 1].Right - 1;
-          if (covers) okR++; info.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right}" : "none")} digits {(cells.Count > 0 ? $"{cells[0].X}-{cells[cells.Count-1].Right}" : "?")}");
+          var reg = FarmCheck.CountRegion(bi, gr.grid.Scale); var glyphs = FarmCheck.CountGlyphs(bi, gr.grid.Scale);
+          bool covers = reg.HasValue && glyphs.Count > 0 && reg.Value.X <= glyphs[0].X && reg.Value.Right >= glyphs[glyphs.Count - 1].Right
+                        && reg.Value.Y <= glyphs.Min(r => r.Y) && reg.Value.Bottom >= glyphs.Max(r => r.Bottom)
+                        && k3 < lens.Count && reg.Value.X <= glyphs[glyphs.Count - 1].Right - lens[k3] * 11 * gr.grid.Scale;   // wide enough for all digits of the known count
+          if (covers) okR++; k3++;
+          info.Add($"{sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")}: region {(reg.HasValue ? $"{reg.Value.X}-{reg.Value.Right}" : "none")} glyphs {(glyphs.Count > 0 ? $"{glyphs[0].X}-{glyphs[glyphs.Count-1].Right} ({glyphs.Count})" : "none")}");
         }
         Console.WriteLine($"REGION {nm3}: " + string.Join(" | ", info));
-        Check(okR == 10, $"{nm3}: the generic count region covers every count ({okR}/10)");
+        Check(gr.slots.Count == 10 && okR == 10, $"{nm3}: the generic count region covers every count's glyph chain and all its digits ({okR}/10)");
       }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
@@ -450,14 +393,14 @@ static class T {
             ("FindGrid whole image, pitch 0", () => FarmCheck.FindGrid(ofi, 0, 0, ofi.W, ofi.H)),
             ("LocateInventory", () => FarmCheck.LocateInventory(ofi) ?? new Grid()) }) {
           var g = gfn();
-          var rd = FarmCheck.BestRead(ofi, g, FarmCheck.DefaultIcons(), digs);
-          Console.WriteLine($"OFF {label}: grid {g.X:0},{g.Y:0} pitch {g.PitchX:0.00}x{g.PitchY:0.00} contrast {g.Score:0.00} weakest {FarmCheck.WeakestLine(ofi, g):0.0} -> read grid {rd.grid.X:0},{rd.grid.Y:0}: " + string.Join(",", rd.slots.Select(x => x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC") + "=" + (x.Count?.ToString() ?? "?"))));
+          var rd = FarmCheck.BestRead(ofi, g, FarmCheck.DefaultIcons());
+          Console.WriteLine($"OFF {label}: grid {g.X:0},{g.Y:0} pitch {g.PitchX:0.00}x{g.PitchY:0.00} contrast {g.Score:0.00} weakest {FarmCheck.WeakestLine(ofi, g):0.0} -> read grid {rd.grid.X:0},{rd.grid.Y:0}: " + string.Join(",", rd.slots.Select(x => x.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC") + " g" + x.GlyphCount)));
         }
       }
       var f1080 = System.IO.Path.Combine(dataDir, "inv-1080.bin");
       if (System.IO.File.Exists(f1080)) {
         var small = Load(f1080); var g2 = FarmCheck.FindGrid(small, 1434, 186, 459, 459);
-        var got2 = string.Join(",", FarmCheck.BestRead(small, g2, icons, digs).slots.Select(x => x.Item + "=" + (x.Count?.ToString() ?? "?")));
+        var got2 = string.Join(",", FarmCheck.BestRead(small, g2, icons).slots.Select(x => x.Item + " g" + x.GlyphCount));
         Console.WriteLine($"INFO 1920x1080 (resized screenshot): grid pitch {g2.PitchX:0.00} -> {got2}");
         Console.WriteLine($"INFO 1080p-sized (resized, blurry) inventory: pitch {g2.PitchX:0.00} at {g2.X:0},{g2.Y:0} (true grid at 1439,190)");
       }
@@ -489,7 +432,7 @@ static class T {
     { var smc = new FarmCheck.CountSmoother();
       foreach (var v in new[]{ 158, 158, 158 }) smc.Add(new Dictionary<string,int>{ ["FC High"]=v });
       smc.Add(new Dictionary<string,int>{ ["FC High"]=170 }, new HashSet<string>{ "FC High" });
-      Check(smc.Stable()["FC High"]==170, "a count both readers agreed on shows at once");
+      Check(smc.Stable()["FC High"]==170, "a confident count (every stack read by the text reader) shows at once");
       smc.Add(new Dictionary<string,int>{ ["FC High"]=70 });
       Check(smc.Stable()["FC High"]==170, "an unconfirmed truncated read doesn't override it"); }
     var sm = new FarmCheck.CountSmoother();

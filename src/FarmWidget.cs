@@ -52,7 +52,6 @@ namespace CAHelper
         // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
         Rectangle invArea = new Rectangle(1905, 240, 620, 615), endArea = new Rectangle(209, 284, 630, 745), lootArea = new Rectangle(2105, 1195, 395, 160);
         List<(string name, double[] f)> icons = FarmCheck.DefaultIcons();
-        readonly List<(char d, string cell)> extraDigits = new List<(char, string)>();
         List<string> rareWords = new List<string> { "Jewel", "Slot Extender", "Potion of Luck", "Stone" };
 
         // session
@@ -63,7 +62,7 @@ namespace CAHelper
         readonly Dictionary<string, int> rare = new Dictionary<string, int>();
         List<string> lastLoot; long lootPrint;
         bool endLatched; DateTime endGoneSince = DateTime.MinValue, invOpenSince = DateTime.MinValue, lastInvRead = DateTime.MinValue;
-        Grid? grid; Grid? readGrid; Img lastInvImg; List<SlotRead> lastSlots = new List<SlotRead>();
+        Grid? grid; Grid? readGrid;
         string lastAnchorInfo, ovAnchor = ""; bool ovAnchorOk; FarmCheck.AnchorResult ovAnchorRes; Rectangle ovAnchorCap;
         readonly Dictionary<(int r, int c), string> slotIdentity = new Dictionary<(int, int), string>();   // sticky icon identities per slot
         double[] coreTab;                                                       // tab-strip fingerprint of the core tab
@@ -122,7 +121,6 @@ namespace CAHelper
                 else if (k == "loot" && R() is Rectangle c) lootArea = c;
                 else if (k == "rare") rareWords = v.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (k.StartsWith("icon:")) learnedIcons.Add((k.Substring(5), v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
-                else if (k.StartsWith("digit:") && k.Length == 7) extraDigits.Add((k[6], v));
                 else if (k == "slot") slotSize = FarmCheck.ParseSlotSize(v);
                 else if (k == "coretab") coreTab = v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray();
             }
@@ -135,13 +133,10 @@ namespace CAHelper
             var lines = new List<string> { "# Cabal Helper Farm Tracker settings (written by the helper)", "inventory=" + Rs(invArea), "end=" + Rs(endArea), "loot=" + Rs(lootArea), "rare=" + string.Join(", ", rareWords) };
             if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.DefaultIcons()) && !icons.SequenceEqual(FarmCheck.Icons))
                 foreach (var (n, f) in icons) lines.Add("icon:" + n + "=" + string.Join(" ", f.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture))));
-            foreach (var (d, cell) in extraDigits) lines.Add("digit:" + d + "=" + cell);
             if (slotSize != null) lines.Add("slot=" + FarmCheck.FormatSlotSize(slotSize.Value));
             if (coreTab != null) lines.Add("coretab=" + string.Join(" ", coreTab.Select(x => x.ToString("0.0", CultureInfo.InvariantCulture))));
             try { File.WriteAllLines(ConfigPath, lines); } catch { }
         }
-
-        List<(char d, string cell)> Digits => FarmCheck.Digits.Concat(extraDigits).ToList();
 
         ContextMenuStrip Menu2()
         {
@@ -151,7 +146,6 @@ namespace CAHelper
             m.Items.Add("Set loot-feed area (\"Obtain ... x 1\" lines)…", null, (s, e) => Pick(ref lootArea, "Drag a box around the loot messages (\"Obtain ... x 1\"). Esc cancels."));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Learn core icons from the open inventory", null, (s, e) => LearnIcons());
-            m.Items.Add("Fix counts (and teach digits)…", null, (s, e) => FixCounts());
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Open farm log", null, (s, e) => Files.OpenInTextEditor(LogPath));
             m.Items.Add("Diagnostics: what the tracker decided", null, (s, e) => Files.OpenInTextEditor(DebugPath));
@@ -164,12 +158,12 @@ namespace CAHelper
 
         void ResetAll()
         {
-            if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons, digits and core tab are forgotten. The farm log is kept.",
+            if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons and core tab are forgotten. The farm log is kept.",
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
-            icons = FarmCheck.DefaultIcons(); extraDigits.Clear(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
+            icons = FarmCheck.DefaultIcons(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
-            Debug("RESET: areas back to defaults, learned icons/digits/core tab forgotten");
+            Debug("RESET: areas back to defaults, learned icons/core tab forgotten");
             Render();
         }
 
@@ -359,10 +353,9 @@ namespace CAHelper
                     overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(x, gy + (int)g.Y), B = new Point(x, gy + (int)Math.Round(g.Y + 8 * g.PitchY)), C = Color.Lime });
                     overlay.Lines.Add(new DebugOverlay.Seg { A = new Point(gx + (int)g.X, y), B = new Point(gx + (int)Math.Round(g.X + 8 * g.PitchX), y), C = Color.Lime });
                 }
-                var stable = running ? smoother.Stable() : null;
                 foreach (var sl in ovSlots)
                 {
-                    string shown = stable != null && stable.TryGetValue(sl.Item, out int sv) ? sv.ToString() : (sl.Count?.ToString() ?? "?");
+                    string shown = sl.Count?.ToString() ?? "?";                     // the text reader's count; "?" until read
                     overlay.Tags.Add(new DebugOverlay.Note { P = new Point(gx + (int)(g.X + sl.Col * g.PitchX) + 2, gy + (int)(g.Y + sl.Row * g.PitchY) + 2),
                         Text = Short(sl.Item) + " " + shown + $" ·{sl.IconDist:0.0}", C = sl.Count.HasValue ? Color.Yellow : Color.Red });
                 }
@@ -391,12 +384,12 @@ namespace CAHelper
                     var img = PartyOcr.ToImg(bmp); int top = invArea.Y - InvCapture.Y;
                     ovInvCap = InvCapture;
                     var g = FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch);
-                    if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null; }
+                    if (!FarmCheck.InventoryOpen(img, g)) { ovInv = $"not visible (contrast {g.Score:0.00}, needs 1.70)"; ovGrid = null; ovSlots = new List<SlotRead>(); ovTab = null; }
                     else
                     {
                         var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult pres);
                         ovAnchorRes = pres; ovAnchorCap = InvCapture; ovAnchor = pres.Info; ovAnchorOk = pres.Ok;
-                        var (g2, slots) = pres.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, Digits, 8, 8, slotIdentity)) : FarmCheck.BestRead(img, g, icons, Digits);
+                        var (g2, slots) = pres.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, 8, 8, slotIdentity)) : FarmCheck.BestRead(img, g, icons);
                         if (pres.Ok)
                         {
                             foreach (var sl in slots) slotIdentity[(sl.Row, sl.Col)] = sl.Item;
@@ -512,7 +505,7 @@ namespace CAHelper
                 {
                     invOpenSince = DateTime.MinValue;
                     Debug(hadGrid ? $"inventory closed (or moved): not found again in its area ({locatedBy})" : $"inventory not open in its area ({locatedBy}; no grid with contrast 1.70)", "closed");
-                    ovInv = hadGrid ? "closed" : "not visible (no grid with contrast 1.70)"; ovGrid = null; ovSlots.Clear(); ovTab = null;
+                    ovInv = hadGrid ? "closed" : "not visible (no grid with contrast 1.70)"; ovGrid = null; ovSlots = new List<SlotRead>(); ovTab = null;
                     waitReason = "no inventory grid visible yet (searching the screen every 3 s)";
                     if (baseline == null || finishing) TryLocateInventory(now);          // waiting for counts: maybe it's elsewhere
                     return;
@@ -532,8 +525,8 @@ namespace CAHelper
                 if (anchorInfo != lastAnchorInfo) { Debug("anchor: " + anchorInfo, "anchor"); lastAnchorInfo = anchorInfo; }
                 ovAnchor = anchorInfo; ovAnchorOk = anchorOk; ovAnchorRes = ares; ovAnchorCap = InvCapture;
                 var (g, slots) = anchorOk
-                    ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, Digits, 8, 8, slotIdentity))   // pinned: no position search, sticky identities
-                    : FarmCheck.BestRead(img, grid.Value, icons, Digits, keep: readGrid);
+                    ? (anchored, FarmCheck.ReadInventory(img, anchored, icons, 8, 8, slotIdentity))   // pinned: no position search, sticky identities
+                    : FarmCheck.BestRead(img, grid.Value, icons, keep: readGrid);
                 if (anchorOk)
                 {
                     foreach (var sl in slots) slotIdentity[(sl.Row, sl.Col)] = sl.Item;
@@ -541,7 +534,7 @@ namespace CAHelper
                 }
                 int found = slots.Select(x => x.Item).Distinct().Count();
                 int allCores = icons.Select(i => i.name).Distinct().Count();
-                ovInvCap = InvCapture; ovGrid = g; ovSlots = slots; ovInv = $"open, {found} core types";
+                ovInvCap = InvCapture; ovGrid = g; ovInv = $"open, {found} core types";
                 ovTab = coreTab == null ? "Tab: learning from this read" : tabDist <= FarmCheck.TabMatchMax ? $"Core tab ✓ ({tabDist:0.0})" : $"Other tab? ({tabDist:0.0})";
                 ovTabColor = tabDist > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
                 if (tabDist > FarmCheck.TabMatchMax)
@@ -553,13 +546,14 @@ namespace CAHelper
                     {
                         Debug($"skipped: another inventory tab is open (tab strip differs {tabDist:0.0}, limit {FarmCheck.TabMatchMax}; {found} core types recognised)", "othertab");
                         waitReason = "another inventory tab seems to be open - switch to the core tab";
+                        ovSlots = slots;
                         return;
                     }
                 }
                 int expectedFound = baseline != null ? baseline.Count(kv => kv.Value > 0) : Math.Min(5, icons.Count / 2);
-                SaveAnnotated(bmp, g, slots, top);
                 if (found == 0 || found * 2 < expectedFound)
                 {
+                    ovSlots = slots; SaveAnnotated(bmp, g, slots, top);
                     Debug($"skipped: only {found} core types recognised (need {Math.Max(1, (expectedFound + 1) / 2)}) - wrong tab or icons need re-learning", "few:" + found);
                     waitReason = $"only {found} core types recognised - core tab open? (else Areas & learning > Learn core icons)";
                     if (found == 0)
@@ -574,23 +568,14 @@ namespace CAHelper
                 waitReason = null;
                 if (slotSize == null || Math.Abs(slotSize.Value - g.PitchX) > 0.5) { slotSize = g.PitchX; SaveConfig(); Debug($"slot size {g.PitchX:0.0} px saved (read recognised {found} core types)"); }
                 if (coreTab == null) { coreTab = FarmCheck.TabPrint(img, g); SaveConfig(); Debug("core tab remembered from this read"); }
-                Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col}={(x.Count?.ToString() ?? "?")} (icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.Count)));
+                Debug("read: " + string.Join(", ", slots.Select(x => $"{Short(x.Item)}@{x.Row},{x.Col} ({x.GlyphCount} glyphs, icon {x.IconDist:0.00})")), "read:" + string.Join(",", slots.Select(x => x.Item + x.GlyphCount)));
                 if (readGrid == null || Math.Abs(readGrid.Value.X - g.X) > 0.5 || Math.Abs(readGrid.Value.Y - g.Y) > 0.5)
                     Debug($"read grid {(readGrid == null ? "set" : "moved")} to {g.X:0},{g.Y:0} (slot {g.PitchX:0.0} px)");
-                readGrid = g; lastInvImg = img; lastSlots = slots;
-                // Counts: the text reader is primary (it doesn't depend on digit shapes or the icon shine);
-                // the shape matcher's value is the fallback for bands the reader can't read.
+                readGrid = g;
+                // Counts come only from the text reader, on the raw pixels of each slot's count region.
                 if (busyInv) return;
                 busyInv = true;
                 var copy = (Bitmap)bmp.Clone(); var frameNow = (Bitmap)bmp.Clone(); var gridNow = g; var slotsNow = slots;
-                // Show the shape reader's counts right away (a few ms); the text reader confirms or corrects them below.
-                {
-                    var quick = new Dictionary<string, int>();
-                    foreach (var sl in slotsNow) if (sl.Count.HasValue) quick[sl.Item] = quick.TryGetValue(sl.Item, out int c0) ? c0 + sl.Count.Value : sl.Count.Value;
-                    smoother.Add(quick); readsSinceStart++;
-                    ApplyRead(smoother.Stable(), smoother.Gone());
-                    Render();
-                }
                 BeginInvoke((Action)(async () =>
                 {
                     int?[] ocr = null;
@@ -606,51 +591,39 @@ namespace CAHelper
                     finally { copy.Dispose(); }
                     try
                     {
-                        int agree = 0, differ = 0; var disagreements = new List<string>();
+                        var byReader = new HashSet<SlotRead>();
                         for (int i = 0; i < slotsNow.Count; i++)
                         {
-                            int? o = ocr != null && i < ocr.Length ? ocr[i] : null, sh = slotsNow[i].Count;
-                            if (o.HasValue && sh.HasValue)
-                            {
-                                if (o == sh) { agree++; slotsNow[i].Cells.Add("agree"); }
-                                else { differ++; disagreements.Add($"{Short(slotsNow[i].Item)} reader {o} / shapes {sh}"); }
-                            }
-                            // Merge: the text reader wins, except that a value which is the tail of the other one is a
-                            // truncated read (a leading digit lost), so the longer value wins.
-                            int? merged = o ?? sh;
-                            if (o.HasValue && sh.HasValue && o != sh)
-                            {
-                                string so = o.Value.ToString(), ss = sh.Value.ToString();
-                                if (ss.EndsWith(so) && ss.Length > so.Length) merged = sh;
-                                else if (so.EndsWith(ss) && so.Length > ss.Length) merged = o;
-                            }
-                            if (merged.HasValue) { slotsNow[i].Count = merged; if (o.HasValue) slotsNow[i].Cells.Add("ocr"); }
+                            int? o = ocr != null && i < ocr.Length ? ocr[i] : null;
+                            if (o.HasValue) { slotsNow[i].Count = o; byReader.Add(slotsNow[i]); }
+                            else if (slotsNow[i].GlyphCount == 0) slotsNow[i].Count = 1;          // no count drawn: a single item
                         }
-                        if (ocr != null) Debug($"counts by text reader: {ocr.Count(v => v.HasValue)}/{slotsNow.Count} read, {agree} agree with shapes, {differ} differ" + (differ > 0 ? ": " + string.Join("; ", disagreements) : ""), "ocr:" + agree + "/" + differ + string.Join("", disagreements));
-                        // Keep the strips of reads where the readers disagree or a count changed since the last read (last 5).
+                        var unread = slotsNow.Where(x => !x.Count.HasValue).Select(x => Short(x.Item)).ToList();
+                        if (ocr != null) Debug($"counts by text reader: {byReader.Count}/{slotsNow.Count} read" + (unread.Count > 0 ? "; unreadable: " + string.Join(", ", unread) : ""), "ocr:" + byReader.Count + string.Join("", unread));
+                        // Keep the strips of reads where a count changed since the last read (last 5).
                         bool changed = false;
                         foreach (var sl in slotsNow)
                             if (sl.Count.HasValue) { if (lastCounts.TryGetValue(sl.Item, out int prev) && prev != sl.Count.Value) changed = true; lastCounts[sl.Item] = sl.Count.Value; }
-                        if (differ > 0 || changed)
+                        if (changed)
                         {
                             stripSaves = (stripSaves + 1) % 5;
                             PartyOcr.SaveLastStrip(Path.Combine(Dir, $"cabal-helper-farm-digits-{stripSaves}.png"));
                             try { frameNow.Save(Path.Combine(Dir, $"cabal-helper-farm-frame-{stripSaves}.png"), System.Drawing.Imaging.ImageFormat.Png); } catch { }
-                            Debug($"count strip saved as cabal-helper-farm-digits-{stripSaves}.png ({(differ > 0 ? "readers disagree" : "a count changed")}): " + string.Join(", ", slotsNow.Select(x => Short(x.Item) + "=" + (x.Count?.ToString() ?? "?"))));
+                            Debug($"count strip saved as cabal-helper-farm-digits-{stripSaves}.png (a count changed): " + string.Join(", ", slotsNow.Select(x => Short(x.Item) + "=" + (x.Count?.ToString() ?? "?"))));
                         }
-                        var counts = new Dictionary<string, int>(); var confident = new HashSet<string>();
+                        SaveAnnotated(frameNow, gridNow, slotsNow, top);
+                        var counts = new Dictionary<string, int>();
                         foreach (var sl in slotsNow)
                         {
                             if (!sl.Count.HasValue) continue;
                             counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                         }
-                        // a core is confident only if every stack of it was agreed by both readers
-                        foreach (var name in counts.Keys) if (slotsNow.Where(x => x.Item == name).All(x => x.Cells.Contains("agree"))) confident.Add(name); else confident.Remove(name);
-                        if (slotsNow.Any(x => !x.Count.HasValue)) Warn("Some counts unreadable: Areas & learning > Fix counts");
+                        // confident = every stack of the core was read by the text reader this time: shown at once
+                        var confident = new HashSet<string>(counts.Keys.Where(name => slotsNow.Where(x => x.Item == name).All(byReader.Contains)));
+                        if (unread.Count > 0) Warn("Some counts unreadable by the text reader: see Areas & learning > Diagnostics: last count strip");
                         smoother.Add(counts, confident); readsSinceStart++;
-                        var stable = smoother.Stable();
-                        ApplyRead(stable, smoother.Gone());
-                        ovSlots = slotsNow; Render();
+                        ApplyRead(smoother.Stable(), smoother.Gone());
+                        ovSlots = slotsNow; Render(); DrawOverlay();
                     }
                     finally { busyInv = false; frameNow.Dispose(); }
                 }));
@@ -779,7 +752,7 @@ namespace CAHelper
                     Debug("learn icons: inventory not found");
                     MessageBox.Show("Open the inventory on the core tab first (and check Set inventory area).", "Farm Tracker"); return;
                 }
-                g = FarmCheck.BestRead(img, g, icons, Digits).grid;
+                g = FarmCheck.BestRead(img, g, icons).grid;
                 // same layout as taught: top row Upgrade Cores highest -> lowest, bottom row Force Cores
                 var learned = new List<(string, double[])>();
                 var emptySlots = new List<string>();
@@ -789,7 +762,7 @@ namespace CAHelper
                     if (FarmCheck.Dist(f, FarmCheck.EmptySlot) < 1.0) emptySlots.Add(FarmCheck.Icons[i].name); else learned.Add((FarmCheck.Icons[i].name, f));
                 }
                 // Check the new icons before keeping them: every learned core must be found again, in its own slot.
-                var verify = FarmCheck.ReadInventory(img, g, learned, Digits);
+                var verify = FarmCheck.ReadInventory(img, g, learned);
                 bool ok = learned.Count >= 5 && learned.All(l => verify.Any(v => v.Item == l.Item1));
                 SaveAnnotated(bmp, g, verify, invArea.Y - InvCapture.Y);
                 Debug($"learn icons: {learned.Count} learned, empty slots: {(emptySlots.Count == 0 ? "none" : string.Join(", ", emptySlots))}, verify {(ok ? "OK" : "FAILED")}");
@@ -802,23 +775,6 @@ namespace CAHelper
                 foreach (var name in emptySlots) { var d = icons.FirstOrDefault(x => x.name == name); if (d.f != null) learned.Add((name, d.f)); }
                 icons = learned; grid = g; coreTab = FarmCheck.TabPrint(img, g); SaveConfig();
                 MessageBox.Show($"Learned {learned.Count - emptySlots.Count} core icons and remembered this tab as the core tab." + (emptySlots.Count > 0 ? "\nEmpty slots (kept the defaults): " + string.Join(", ", emptySlots) : ""), "Farm Tracker");
-            }
-        }
-
-        void FixCounts()
-        {
-            if (lastInvImg == null || lastSlots.Count == 0) { MessageBox.Show("Start a session and open the core tab for a second first.", "Farm Tracker"); return; }
-            using (var d = new FixCountsDialog(lastSlots))
-            {
-                if (d.ShowDialog() != DialogResult.OK) return;
-                var counts = current ?? baseline ?? new Dictionary<string, int>();
-                foreach (var (slot, value) in d.Values)
-                {
-                    extraDigits.AddRange(FarmCheck.LearnDigits(lastInvImg, grid.Value, slot.Row, slot.Col, value, Digits));
-                    slot.Count = value; counts[slot.Item] = value;
-                }
-                if (current != null) current = counts; else baseline = counts;
-                SaveConfig(); Render();
             }
         }
 
@@ -885,41 +841,5 @@ namespace CAHelper
         }
 
         static string Fmt(TimeSpan t) => t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
-    }
-
-    /// Lets the player type the real stack counts; wrong or unreadable digits are learned from them.
-    sealed class FixCountsDialog : Form
-    {
-        public List<(SlotRead slot, int value)> Values { get; } = new List<(SlotRead, int)>();
-        readonly List<(SlotRead slot, TextBox box)> rows = new List<(SlotRead, TextBox)>();
-        public FixCountsDialog(List<SlotRead> slots)
-        {
-            Text = "Fix counts"; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterScreen; TopMost = true; ShowInTaskbar = false;
-            BackColor = Theme.Panel; ForeColor = Theme.Text; Font = Theme.Normal; Padding = new Padding(12);
-            AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            var grid = new TableLayoutPanel { ColumnCount = 2, AutoSize = true };
-            grid.Controls.Add(new Label { Text = "Type the real count where it's wrong or \"?\":", AutoSize = true, ForeColor = Theme.Muted }); grid.SetColumnSpan(grid.Controls[0], 2);
-            foreach (var s in slots)
-            {
-                grid.Controls.Add(new Label { Text = s.Item, AutoSize = true, Margin = new Padding(0, 6, 12, 0) });
-                var tb = new TextBox { Width = 70, Text = s.Count?.ToString() ?? "", BackColor = Color.FromArgb(15, 19, 23), ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
-                grid.Controls.Add(tb); rows.Add((s, tb));
-            }
-            var save = Theme.MakeButton("Save", primary: true); save.Width = 80;
-            var cancel = Theme.MakeButton("Cancel"); cancel.Width = 80;
-            save.Click += (o, e) =>
-            {
-                foreach (var (s, tb) in rows)
-                    if (int.TryParse(tb.Text.Trim(), out int v) && v >= 0 && v != (s.Count ?? -1)) Values.Add((s, v));
-                DialogResult = DialogResult.OK; Close();
-            };
-            cancel.Click += (o, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            AcceptButton = save; CancelButton = cancel;
-            var buttons = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 10, 0, 0) }; buttons.Controls.Add(save); buttons.Controls.Add(cancel);
-            var outer = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
-            outer.Controls.Add(grid); outer.Controls.Add(buttons); Controls.Add(outer);
-            Shown += (o, e) => Activate();
-        }
     }
 }
