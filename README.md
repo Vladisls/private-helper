@@ -140,6 +140,8 @@ FARM TRACKER
 - The end window and loot feed follow the UI scale automatically (the end window scaled around the
   screen centre, the loot feed at the bottom-right corner; each area remembers the UI scale it was
   set at); re-pick them only if the game places them elsewhere.
+- The end window is found anywhere on screen (it moves left when the guild-treasure window opens with
+  it); its saved area is only checked first, and only the found window's text is read.
 - Start session, then play as usual:
   * every "Quest Dungeon Cleared!" window counts a run, with its time, dungeon and DP;
   * open the core tab for about a second at the start (a yellow prompt asks for it) and at

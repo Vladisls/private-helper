@@ -287,6 +287,43 @@ static class T {
               "end-window trigger on the 15% larger capture: yes on the end window (also 40 px off its area), no in dungeon or with inventory");
         Check(FarmCheck.EndWindowLikely(C(end, endA), 630, 745) == FarmCheck.EndWindowLikely(C(end, endA)), "window-sized check without a margin = the plain check");
       }
+      {
+        // the end window anywhere on screen (it moves left when the guild-treasure window opens with it)
+        string R((System.Drawing.Rectangle at, double score)? f) => f.HasValue ? $"{f.Value.at.X},{f.Value.at.Y} {f.Value.at.Width}x{f.Value.at.Height} score {f.Value.score:0.00}" : "none";
+        var swE = System.Diagnostics.Stopwatch.StartNew(); var fe = FarmCheck.FindEndWindow(end, 630, 745); long msE = swE.ElapsedMilliseconds;
+        for (int k = 0; k < 4; k++) FarmCheck.FindEndWindow(end, 630, 745);
+        var swE5 = System.Diagnostics.Stopwatch.StartNew(); for (int k = 0; k < 5; k++) FarmCheck.FindEndWindow(end, 630, 745); double msE5 = swE5.ElapsedMilliseconds / 5.0;
+        var fi = FarmCheck.FindEndWindow(inv, 630, 745); var ft0 = FarmCheck.FindEndWindow(tmr, 630, 745);
+        Console.WriteLine($"INFO find end window ({end.W}x{end.H}, integral images + scan, {(DebugBuild ? "Debug build" : "Release build")}): first {msE} ms, warm {msE5:0.0} ms; end shot -> {R(fe)}; inventory shot -> {R(fi)}; timer shot -> {R(ft0)}");
+        Check(fe.HasValue && Math.Abs(fe.Value.at.X - 209) <= 12 && Math.Abs(fe.Value.at.Y - 284) <= 12 && fe.Value.at.Width == 630 && fe.Value.at.Height == 745,
+              $"end window found on the whole screen at its place ({R(fe)})");
+        Check(fi == null && ft0 == null, "no end window found on the inventory and timer shots");
+        // the window block moved 200 px left (as when the guild-treasure window opens with it); its old place filled
+        // with the dungeon behind it (timer shot), or with a flat dark colour
+        Img Moved(Func<int, int, byte[]> fill) {
+          var im = new Img(end.W, end.H, (byte[])end.Px.Clone());
+          for (int r = 0; r < 745; r++) for (int c = 0; c < 630; c++) { var p = fill(209 + c, 284 + r); Buffer.BlockCopy(p, 0, im.Px, ((284 + r) * end.W + 209 + c) * 4, 4); }
+          for (int r = 0; r < 745; r++) Buffer.BlockCopy(end.Px, ((284 + r) * end.W + 209) * 4, im.Px, ((284 + r) * end.W + 9) * 4, 630 * 4);
+          return im; }
+        var sh = Moved((x, y) => new[] { tmr.Px[(y * tmr.W + x) * 4], tmr.Px[(y * tmr.W + x) * 4 + 1], tmr.Px[(y * tmr.W + x) * 4 + 2], (byte)255 });
+        var fs = FarmCheck.FindEndWindow(sh, 630, 745);
+        var sd = Moved((x, y) => new byte[] { 20, 22, 25, 255 });
+        var fd = FarmCheck.FindEndWindow(sd, 630, 745);
+        Console.WriteLine($"INFO end window moved 200 px left: on the dungeon -> {R(fs)}; on flat dark -> {R(fd)}");
+        Check(fs.HasValue && Math.Abs(fs.Value.at.X - 9) <= 12 && Math.Abs(fs.Value.at.Y - 284) <= 12, $"end window moved 200 px left (dungeon around it): found at the new place ({R(fs)})");
+        Check(fd.HasValue && Math.Abs(fd.Value.at.X - 9) <= 12 && Math.Abs(fd.Value.at.Y - 284) <= 12, $"end window moved 200 px left (flat dark around it): found at the new place ({R(fd)})");
+        // the saved area's 15% larger capture (the cheap first check): the window's exact place inside it
+        var capA = new System.Drawing.Rectangle(162, 228, 724, 857);
+        var fc = FarmCheck.FindEndWindow(Crop(end, capA.X, capA.Y, capA.Width, capA.Height), 630, 745);
+        Check(fc.HasValue && Math.Abs(capA.X + fc.Value.at.X - 209) <= 12 && Math.Abs(capA.Y + fc.Value.at.Y - 284) <= 12 && FarmCheck.FindEndWindow(Crop(tmr, capA.X, capA.Y, capA.Width, capA.Height), 630, 745) == null,
+              $"end window inside the saved area's capture: found at its place ({R(fc)} in the capture), nothing there in the dungeon");
+        var qf = System.IO.Path.Combine(dataDir, "q.bin");
+        if (System.IO.File.Exists(qf)) { var fqs = FarmCheck.FindEndWindow(Load(qf), 630, 745); Check(fqs == null, $"no end window on a shot with the equipment and inventory windows open ({R(fqs)})"); }
+        // the game at UI scale 0.6: the window is 378x447 wherever it is
+        var e6 = ResizeBicubic(end, 0.6); var f6 = FarmCheck.FindEndWindow(e6, 378, 447);
+        Check(f6.HasValue && Math.Abs(f6.Value.at.X - 125) <= 8 && Math.Abs(f6.Value.at.Y - 170) <= 8 && FarmCheck.FindEndWindow(ResizeBicubic(tmr, 0.6), 378, 447) == null,
+              $"end window at UI scale 0.6 (378x447): found ({R(f6)}), none in the dungeon");
+      }
       var ft = System.IO.Path.Combine(dataDir, "tab1.bin");
       if (System.IO.File.Exists(ft)) {
         var t1 = Load(ft);

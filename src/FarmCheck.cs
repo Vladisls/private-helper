@@ -1843,26 +1843,116 @@ namespace CAHelper
         public static bool EndWindowLikely(Img img, int winW, int winH)
         {
             if (winW <= 0 || winH <= 0 || (winW >= img.W && winH >= img.H)) return EndWindowLikely(img);
-            int sw = (img.W + 1) / 2, sh = (img.H + 1) / 2;                   // samples every 2nd pixel, like above
-            int ww = Math.Min(sw, (Math.Min(winW, img.W) + 1) / 2), wh = Math.Min(sh, (Math.Min(winH, img.H) + 1) / 2);
-            var ys = new int[(sw + 1) * (sh + 1)]; var ds = new int[(sw + 1) * (sh + 1)];
-            for (int sy = 0; sy < sh; sy++)
-                for (int sx = 0; sx < sw; sx++)
-                {
-                    img.Rgb(sx * 2, sy * 2, out int r, out int g, out int b);
-                    int i = (sy + 1) * (sw + 1) + sx + 1, up = sy * (sw + 1) + sx + 1;
-                    ys[i] = (EndYellow(r, g, b) ? 1 : 0) + ys[i - 1] + ys[up] - ys[up - 1];
-                    ds[i] = (EndDark(r, g, b) ? 1 : 0) + ds[i - 1] + ds[up] - ds[up - 1];
-                }
-            int Sum(int[] a, int x0, int y0) => a[(y0 + wh) * (sw + 1) + x0 + ww] - a[y0 * (sw + 1) + x0 + ww] - a[(y0 + wh) * (sw + 1) + x0] + a[y0 * (sw + 1) + x0];
+            var t = new EndTables(img);
+            int ww = Math.Min(t.SW, (Math.Min(winW, img.W) + 1) / 2), wh = Math.Min(t.SH, (Math.Min(winH, img.H) + 1) / 2);
             const int Steps = 6;
             for (int j = 0; j <= Steps; j++)
                 for (int i = 0; i <= Steps; i++)
                 {
-                    int x0 = (sw - ww) * i / Steps, y0 = (sh - wh) * j / Steps;
-                    if (EndRatios(Sum(ys, x0, y0), Sum(ds, x0, y0), ww * wh)) return true;
+                    int x0 = (t.SW - ww) * i / Steps, y0 = (t.SH - wh) * j / Steps;
+                    if (EndRatios(t.Yellow(x0, y0, ww, wh), t.Dark(x0, y0, ww, wh), ww * wh)) return true;
                 }
             return false;
+        }
+
+        /// Summed-area tables of the end window's two pixel tests (yellow text, dark panel) on every 2nd pixel of a
+        /// picture (the samples EndWindowLikely counts), so any window's counts are four lookups; with frame=true
+        /// also running sums of brightness steps along rows (a horizontal line: the pixel above and below differ by
+        /// 20+) and along columns (a vertical line), so the share of a row or column segment on a line is two lookups.
+        sealed class EndTables
+        {
+            public readonly int SW, SH; readonly int[] ys, ds, hl, vl;
+            public EndTables(Img img, bool frame = false)
+            {
+                SW = (img.W + 1) / 2; SH = (img.H + 1) / 2; int st = SW + 1;
+                ys = new int[st * (SH + 1)]; ds = new int[st * (SH + 1)];
+                var px = img.Px; var lum = frame ? new int[SW * SH] : null;
+                for (int sy = 0; sy < SH; sy++)
+                {
+                    int rowY = 0, rowD = 0, src = sy * 2 * img.W * 4, i = (sy + 1) * st + 1;
+                    for (int sx = 0; sx < SW; sx++, src += 8, i++)
+                    {
+                        int b = px[src], g = px[src + 1], r = px[src + 2];
+                        if (EndYellow(r, g, b)) rowY++;
+                        if (EndDark(r, g, b)) rowD++;
+                        ys[i] = ys[i - st] + rowY; ds[i] = ds[i - st] + rowD;
+                        if (lum != null) lum[sy * SW + sx] = r + g + b;
+                    }
+                }
+                if (!frame) return;
+                hl = new int[st * SH]; vl = new int[(SH + 1) * SW];
+                const int Step = 20 * 3;                                        // brightness step 20 (sum of r+g+b)
+                for (int sy = 0; sy < SH; sy++)
+                    for (int sx = 0; sx < SW; sx++)
+                    {
+                        int c = sy * SW + sx;
+                        bool h = sy > 0 && sy < SH - 1 && Math.Abs(lum[c + SW] - lum[c - SW]) >= Step;
+                        bool v = sx > 0 && sx < SW - 1 && Math.Abs(lum[c + 1] - lum[c - 1]) >= Step;
+                        hl[sy * st + sx + 1] = hl[sy * st + sx] + (h ? 1 : 0);
+                        vl[sx * (SH + 1) + sy + 1] = vl[sx * (SH + 1) + sy] + (v ? 1 : 0);
+                    }
+            }
+            int Sum(int[] a, int x0, int y0, int w, int h) { int st = SW + 1; return a[(y0 + h) * st + x0 + w] - a[y0 * st + x0 + w] - a[(y0 + h) * st + x0] + a[y0 * st + x0]; }
+            public int Yellow(int x0, int y0, int w, int h) => Sum(ys, x0, y0, w, h);
+            public int Dark(int x0, int y0, int w, int h) => Sum(ds, x0, y0, w, h);
+            /// Best share of a horizontal line over x0..x0+w on the rows y-band..y+band (0..1).
+            public double HLine(int x0, int y, int w, int band)
+            {
+                int best = 0, st = SW + 1;
+                for (int yy = Math.Max(0, y - band); yy <= Math.Min(SH - 1, y + band); yy++) best = Math.Max(best, hl[yy * st + x0 + w] - hl[yy * st + x0]);
+                return (double)best / w;
+            }
+            /// Best share of a vertical line over y0..y0+h on the columns x-band..x+band (0..1).
+            public double VLine(int x, int y0, int h, int band)
+            {
+                int best = 0, st = SH + 1;
+                for (int xx = Math.Max(0, x - band); xx <= Math.Min(SW - 1, x + band); xx++) best = Math.Max(best, vl[xx * st + y0 + h] - vl[xx * st + y0]);
+                return (double)best / h;
+            }
+        }
+
+        /// The window's frame must be a line along at least this share of each of its four sides.
+        public const double EndFrameMin = 0.9;
+
+        /// Searches the picture (a full-screen capture, or a capture around the saved area) for the end window of
+        /// size winW x winH (the expected size at the current UI scale). Every position 8 px apart, then +-8 px in
+        /// 2 px steps around the best, is judged in O(1) from summed-area tables: the EndWindowLikely rule (same
+        /// thresholds) and a frame, a straight brightness step along each of the four sides (within +-6 px, so a
+        /// slightly different size is found too). The rule alone also passes on dark parts of the dungeon with some
+        /// yellow in them; the frame tells a window from the world. Best = the most complete frame among positions
+        /// passing the rule. Its rectangle in picture pixels and score (the frame's weakest side, EndFrameMin..1)
+        /// when it is at least EndFrameMin, else null. A window larger than the picture is clamped to it.
+        public static (Rectangle at, double score)? FindEndWindow(Img screen, int winW, int winH)
+        {
+            if (screen == null || winW <= 0 || winH <= 0 || screen.W < 8 || screen.H < 8) return null;
+            var t = new EndTables(screen, frame: true);
+            int ww = Math.Max(2, Math.Min(t.SW - 1, (Math.Min(winW, screen.W) + 1) / 2)), wh = Math.Max(2, Math.Min(t.SH - 1, (Math.Min(winH, screen.H) + 1) / 2));
+            int mx = t.SW - ww - 1, my = t.SH - wh - 1, tot = ww * wh;
+            const int Band = 3, Stride = 4, Refine = 4;                          // samples: +-6 px, 8 px, +-8 px
+            double Frame(int x, int y, out double sum)
+            {
+                double a = t.HLine(x, y, ww, Band), b = t.HLine(x, y + wh, ww, Band), c = t.VLine(x, y, wh, Band), d = t.VLine(x + ww, y, wh, Band);
+                sum = a + b + c + d; return Math.Min(Math.Min(a, b), Math.Min(c, d));
+            }
+            int bx = -1, by = -1; double best = -1, bestKey = -1;
+            void Try(int x, int y)
+            {
+                if (!EndRatios(t.Yellow(x, y, ww, wh), t.Dark(x, y, ww, wh), tot)) return;
+                double f = Frame(x, y, out double sum), key = f + sum * 1e-3;
+                if (key > bestKey) { bestKey = key; best = f; bx = x; by = y; }
+            }
+            for (int y = 0; ; y = Math.Min(y + Stride, my))
+            {
+                for (int x = 0; ; x = Math.Min(x + Stride, mx)) { Try(x, y); if (x >= mx) break; }
+                if (y >= my) break;
+            }
+            if (bx < 0) return null;
+            int cx = bx, cy = by;
+            for (int y = Math.Max(0, cy - Refine); y <= Math.Min(my, cy + Refine); y++)
+                for (int x = Math.Max(0, cx - Refine); x <= Math.Min(mx, cx + Refine); x++) Try(x, y);
+            if (best < EndFrameMin) return null;
+            int px0 = bx * 2, py0 = by * 2;
+            return (new Rectangle(px0, py0, Math.Min(winW, screen.W - px0), Math.Min(winH, screen.H - py0)), best);
         }
 
         public sealed class RunResult { public string Dungeon; public int Seconds; public int Dp; }

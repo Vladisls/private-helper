@@ -30,6 +30,7 @@ namespace CAHelper
         // what the overlay shows (screen pixels)
         Rectangle ovInvCap, ovTitle; string ovInv = "not checked yet"; Grid? ovGrid; List<SlotRead> ovSlots = new List<SlotRead>(); string ovTab; Color ovTabColor = Color.Orange;
         string ovEnd = "not seen"; Color ovEndColor = Color.HotPink; string ovLoot = "";
+        Rectangle? ovEndAt; bool ovEndElsewhere;                                // where the end window was last seen (overlay box)
         string lastDebugKey;
 
         /// Diagnostics: a rolling text log of what the tracker decided (last 300 lines).
@@ -242,7 +243,7 @@ namespace CAHelper
         void StartSession()
         {
             Debug($"session started (screen {PartyOcr.PhysicalScreenWidth()}x{PartyOcr.PhysicalScreenHeight()}, all screens {PartyOcr.PhysicalVirtualScreen()}, inventory area {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height} ({locatedBy}), slot size {(KnownPitch > 0 ? KnownPitch.ToString("0.0", CultureInfo.InvariantCulture) + " px" : "not known yet")})");
-            running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; locatedSinceMissing = false; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false;
+            running = true; started = DateTime.Now; lastLocate = DateTime.MinValue; locatedSinceMissing = false; runs.Clear(); rare.Clear(); baseline = null; current = null; lastLoot = null; endLatched = false; endAt = null; lastEndScan = DateTime.MinValue;
             confirmedEmpty.Clear(); pending = null; smoother.Clear(); readsSinceStart = 0; lastCounts.Clear(); slotIdentity.Clear(); lastKnownCounts.Clear();
             startStop.Text = "Stop session";
             if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play();
@@ -307,32 +308,81 @@ namespace CAHelper
             return default;
         }
 
+        // The end window is not at a fixed place (it moves left when the guild-treasure window opens with it): its
+        // saved area is checked first (cheap), then the whole screen (every monitor) at most once a second.
+        Rectangle? endAt;                                                       // where the latched (counted) window was
+        DateTime lastEndScan = DateTime.MinValue;
+        const double EndScanSeconds = 1.0, EndOcrMargin = 0.05;
+
+        /// Where the end window is on screen now (screen pixels), or null. elsewhere = found by the full-screen scan,
+        /// not in the saved area. While a counted window stays open only its own place is checked (no full scan).
+        Rectangle? LocateEnd(out bool elsewhere)
+        {
+            elsewhere = false;
+            var area = endArea;
+            Rectangle? At(Rectangle look, bool fallback)
+            {
+                var cap = Capture15(look);
+                using (var bmp = PartyOcr.Capture(cap))
+                {
+                    var img = PartyOcr.ToImg(bmp);
+                    var f = FarmCheck.FindEndWindow(img, look.Width, look.Height);
+                    if (f.HasValue) return new Rectangle(cap.X + f.Value.at.X, cap.Y + f.Value.at.Y, f.Value.at.Width, f.Value.at.Height);
+                    // no frame found (e.g. a size a little off): the plain rule on the area, as before
+                    return fallback && FarmCheck.EndWindowLikely(img, look.Width, look.Height) ? look : (Rectangle?)null;
+                }
+            }
+            if (endLatched && endAt.HasValue)
+            {
+                var r = At(endAt.Value, true);
+                elsewhere = r.HasValue && ovEndElsewhere;
+                return r;
+            }
+            var inArea = At(area, true);
+            var clock = DateTime.Now;                                           // real time (Save image probes with a future "now")
+            if (inArea.HasValue || endLatched || (clock - lastEndScan).TotalSeconds < EndScanSeconds) return inArea;
+            lastEndScan = clock;
+            var screen = PartyOcr.PhysicalVirtualScreen();                    // every monitor
+            using (var bmp = PartyOcr.Capture(screen))
+            {
+                var f = FarmCheck.FindEndWindow(PartyOcr.ToImg(bmp), area.Width, area.Height);
+                if (!f.HasValue) return null;
+                elsewhere = true;
+                return new Rectangle(screen.X + f.Value.at.X, screen.Y + f.Value.at.Y, f.Value.at.Width, f.Value.at.Height);
+            }
+        }
+
+        void ShowEnd(Rectangle? at, bool elsewhere, string seenText)
+        {
+            ovEndAt = at; ovEndElsewhere = at.HasValue && elsewhere;
+            ovEnd = at.HasValue ? seenText : "not seen"; ovEndColor = at.HasValue ? Color.Lime : Color.HotPink;
+        }
+
         void CheckEnd(DateTime now)
         {
             if (busyEnd) return;
-            var area = endArea;
-            using (var bmp = PartyOcr.Capture(Capture15(area)))
+            var found = LocateEnd(out bool elsewhere);
+            ShowEnd(found, elsewhere, endLatched ? "counted, waiting for it to close" : "seen, reading…");
+            if (!found.HasValue) { if (endLatched && endGoneSince == DateTime.MinValue) endGoneSince = now; if (endLatched && (now - endGoneSince).TotalSeconds >= 2) { endLatched = false; endAt = null; } return; }
+            endGoneSince = DateTime.MinValue;
+            if (endLatched) return;                                            // this window was already counted
+            var at = found.Value;
+            if (elsewhere) Debug($"end window found at {at.X},{at.Y} (not in the saved area)", $"endat {at.X / 16},{at.Y / 16}");
+            busyEnd = true;
+            // only the detected window is read (plus 5%), never the guild-treasure window or anything else beside it
+            var copy = PartyOcr.Capture(FarmCheck.InflateArea(at, EndOcrMargin, PartyOcr.MonitorOf(at)));
+            BeginInvoke((Action)(async () =>
             {
-                bool likely = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp), area.Width, area.Height);
-                ovEnd = likely ? (endLatched ? "counted, waiting for it to close" : "seen, reading…") : "not seen"; ovEndColor = likely ? Color.Lime : Color.HotPink;
-                if (!likely) { if (endLatched && endGoneSince == DateTime.MinValue) endGoneSince = now; if (endLatched && (now - endGoneSince).TotalSeconds >= 2) endLatched = false; return; }
-                endGoneSince = DateTime.MinValue;
-                if (endLatched) return;                                            // this window was already counted
-                busyEnd = true;
-                var copy = (Bitmap)bmp.Clone();
-                BeginInvoke((Action)(async () =>
+                try
                 {
-                    try
-                    {
-                        var lines = await PartyOcr.ReadLinesAsync(copy);
-                        var r = FarmCheck.ParseEndWindow(lines);
-                        if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; ovEnd = $"run counted: {r.Dungeon} {r.Seconds / 60}:{r.Seconds % 60:00}, {r.Dp} DP"; Debug($"run counted: {r.Dungeon}, {r.Seconds} s, {r.Dp} DP"); if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
-                        else Debug("end-window check fired but the text wasn't a cleared window: " + string.Join(" | ", lines.Take(4)), "endmiss");
-                    }
-                    catch (Exception ex) { Warn("⚠ " + ex.Message); }
-                    finally { copy.Dispose(); busyEnd = false; Render(); }
-                }));
-            }
+                    var lines = await PartyOcr.ReadLinesAsync(copy);
+                    var r = FarmCheck.ParseEndWindow(lines);
+                    if (r != null) { runs.Add((DateTime.Now, r)); endLatched = true; endAt = at; ovEnd = $"run counted: {r.Dungeon} {r.Seconds / 60}:{r.Seconds % 60:00}, {r.Dp} DP"; Debug($"run counted: {r.Dungeon}, {r.Seconds} s, {r.Dp} DP" + (elsewhere ? $" (window at {at.X},{at.Y})" : "")); if (Program.CurrentSettings.Sound) System.Media.SystemSounds.Asterisk.Play(); }
+                    else Debug("end-window check fired but the text wasn't a cleared window: " + string.Join(" | ", lines.Take(4)), "endmiss");
+                }
+                catch (Exception ex) { Warn("⚠ " + ex.Message); }
+                finally { copy.Dispose(); busyEnd = false; Render(); }
+            }));
         }
 
         /// Older Windows can't exclude windows from captures: hide the overlay while capturing instead.
@@ -505,7 +555,11 @@ namespace CAHelper
                     overlay.Boxes.Add(new DebugOverlay.Box { R = tr, C = ovTabColor, Label = ovTab });
                 }
             }
-            overlay.Boxes.Add(new DebugOverlay.Box { R = endArea, C = ovEndColor, Label = $"End window (scale {Sc2(ScaleFor(endRefScale))}): " + ovEnd });
+            {
+                var eb = ovEndAt ?? endArea;                                    // the box follows the window while it is visible
+                string where = !ovEndAt.HasValue ? "" : ovEndElsewhere ? $" found at {eb.X},{eb.Y}, not in the saved area" : $" at {eb.X},{eb.Y}";
+                overlay.Boxes.Add(new DebugOverlay.Box { R = eb, C = ovEndColor, Label = $"End window (scale {Sc2(ScaleFor(endRefScale))}){where}: " + ovEnd });
+            }
             overlay.Boxes.Add(new DebugOverlay.Box { R = lootArea, C = Color.Gold, Label = $"Loot feed (scale {Sc2(ScaleFor(lootRefScale))})" + (ovLoot.Length > 0 ? ": " + ovLoot : "") });
             overlay.KeepOnTop(); overlay.Invalidate();
         }
@@ -561,10 +615,12 @@ namespace CAHelper
                         ovTabColor = td >= 0 && td > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
                     }
                 }
-                var endNow = endArea;
                 using (OverlayHidden())
-                using (var bmp = PartyOcr.Capture(Capture15(endNow)))
-                { bool seen = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp), endNow.Width, endNow.Height); ovEnd = seen ? "seen" : "not seen"; ovEndColor = seen ? Color.Lime : Color.HotPink; }
+                {
+                    var seenAt = LocateEnd(out bool elsewhere);
+                    if (seenAt.HasValue && elsewhere) Debug($"end window found at {seenAt.Value.X},{seenAt.Value.Y} (not in the saved area)", $"endat {seenAt.Value.X / 16},{seenAt.Value.Y / 16}");
+                    ShowEnd(seenAt, elsewhere, "seen");
+                }
             }
             catch (Exception ex) { ovInv = "error: " + ex.Message; }
             DrawOverlay();
