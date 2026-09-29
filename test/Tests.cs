@@ -383,6 +383,34 @@ static class T {
         Console.WriteLine($"REGION {nm3}: " + string.Join(" | ", info));
         Check(gr.slots.Count == 10 && okR == 10, $"{nm3}: the generic count region covers every count's glyph chain and all its digits ({okR}/10)");
       }
+      // OCR input treatments: 5 generic pictures per real count region
+      {
+        FarmCheck.TextPrinter fakePrint = (t, dh) => { int w = Math.Max(1, t.Length * dh * 6 / 10), h = dh + dh / 3; var px = new byte[w * h * 4]; for (int q = 0; q < px.Length; q++) px[q] = 255; return (new Img(w, h, px), dh); };
+        int regionsSeen = 0, okV = 0; var infoV = new List<string>();
+        foreach (var (nmV, imV, boxV) in new[]{ ("inv", inv, (1912,248,612,612)), ("mis", Load(fmis), (815,160,620,620)) }) {
+          var grV = FarmCheck.BestRead(imV, FarmCheck.FindGrid(imV, boxV.Item1, boxV.Item2, boxV.Item3, boxV.Item4), FarmCheck.DefaultIcons());
+          foreach (var sl in grV.slots) {
+            var reg = FarmCheck.CountRegionImage(imV, grV.grid, sl.Row, sl.Col, out int nG);
+            if (reg == null) continue;
+            regionsSeen++;
+            var vs = FarmCheck.MakeCountVariants(reg); var vp = FarmCheck.MakeCountVariants(reg, fakePrint);
+            bool ok = vs.Count == 5 && vs.Select(v => v.name).SequenceEqual(FarmCheck.CountVariantNames) && vp.Count == 5
+                      && vs.Concat(vp).All(v => v.picture != null && v.picture.W > reg.W && v.picture.H > reg.H && v.picture.Px.Length == v.picture.W * v.picture.H * 4
+                                            && v.number.X >= 0 && v.number.Y >= 0 && v.number.Right <= v.picture.W && v.number.Bottom <= v.picture.H && v.number.Width >= reg.W * 2);
+            var iso = vs[3].picture; int black = 0;
+            for (int q = 0; q < iso.W * iso.H; q++) if ((iso.Px[q*4] + iso.Px[q*4+1] + iso.Px[q*4+2]) / 3 < 128) black++;
+            double frac = (double)black / (iso.W * iso.H);
+            ok = ok && black > 0 && frac < 0.30;
+            // printed words widen the prefix / context pictures and push the count to the right; the others are unchanged
+            ok = ok && vp[1].picture.W > vs[1].picture.W && vp[1].number.X > vs[1].number.X && vp[4].picture.W > vs[4].picture.W && vp[4].number.X > vs[4].number.X
+                    && vp[0].picture.W == vs[0].picture.W && vp[2].picture.W == vs[2].picture.W && vp[3].picture.W == vs[3].picture.W;
+            if (ok) okV++;
+            infoV.Add($"{nmV} {sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")} {reg.W}x{reg.H} iso {frac:P0}");
+          }
+        }
+        Console.WriteLine("VARIANTS: " + string.Join(" | ", infoV));
+        Check(regionsSeen == 20 && okV == regionsSeen, $"5 OCR treatments per real count region: non-empty, larger than the region, white-isolated 0-30% black ({okV}/{regionsSeen})");
+      }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
@@ -456,6 +484,17 @@ static class T {
     Check(band.Width >= 55 && band.Height >= 15 && band.X > gi0.X + gi0.PitchX && band.X < gi0.X + 2 * gi0.PitchX, "digit band sits inside its slot");
     Check(FarmCheck.TrailingCount("158")==158 && FarmCheck.TrailingCount("x.158")==158 && FarmCheck.TrailingCount("l58")==158 && FarmCheck.TrailingCount("1158")==1158
           && FarmCheck.TrailingCount("abc")==null && FarrmSafe(), "trailing-digit rule: junk on the left is dropped");
+    // count from the reader's words on a treatment picture: printed words and words off the count are dropped
+    var numBox = new System.Drawing.Rectangle(100, 30, 60, 50);
+    Check(FarmCheck.CountFromWords(new[]{ new OcrWord("Have", 20, 35, 60, 40), new OcrWord("3", 120, 35, 20, 40), new OcrWord("pcs", 180, 40, 50, 35) }, numBox) == 3
+          && FarmCheck.CountFromWords(new[]{ new OcrWord("Have", 20, 35, 60, 40), new OcrWord("pcs", 180, 40, 50, 35) }, numBox) == null
+          && FarmCheck.CountFromWords(new[]{ new OcrWord("Qty9", 20, 35, 100, 40) }, numBox) == 9
+          && FarmCheck.CountFromWords(new[]{ new OcrWord("Havepcs", 20, 35, 200, 40) }, numBox) == null
+          && FarmCheck.CountFromWords(new[]{ new OcrWord("7", 10, 35, 20, 40), new OcrWord("226", 105, 35, 50, 40) }, numBox) == 226, "treatment words: printed words and words off the count are dropped");
+    var flat = new Img(3, 2, Enumerable.Range(0, 24).Select(q => (byte)(q % 4 == 3 ? 255 : 90)).ToArray()); var flat3 = FarmCheck.Enlarge(flat, 3);
+    Check(flat3.W == 9 && flat3.H == 6 && flat3.Px.All(b => b == 90 || b == 255), "bicubic enlarge keeps a flat picture flat");
+    bool threw = false; try { FarmCheck.MakeCountVariants(new Img(0, 0, new byte[0])); } catch (ArgumentException) { threw = true; }
+    Check(threw, "an empty count region is refused with a clear error");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
     var rr = FarmCheck.ParseEndWindow(endLines);
     Check(rr != null && rr.Dungeon=="Steamer Crazy (Awakened)" && rr.Seconds==464 && rr.Dp==5, "end window parsed: Steamer Crazy (Awakened), 7:44, 5 DP");

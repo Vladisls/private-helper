@@ -138,6 +138,17 @@ FARM TRACKER
   are saved, last 5 of each.
 - A count shown as unreadable ("?"): Areas & learning > Diagnostics: last count strip shows what
   the text reader saw and returned.
+- Each count region is shown to the reader in up to 5 treatments until one gives a count:
+  enlarged 3x as is ("raw 3x"), 2x with a printed "Qty" in front ("prefix 2x"), grey and
+  inverted to dark digits on light ("inverted 3x"), only the bright uncoloured pixels as black on
+  white ("white-isolated 3x"), and inside a printed line "Have <count> pcs" ("context line 3x").
+  The count is taken only from the words over the region itself, so the printed words never count.
+- Save image (screen + debug lines) saves, next to the exe (last 5 of each): the screen with the
+  debug drawings (cabal-helper-farm-view-N.png), the last count read (-digits.png) and an OCR test
+  sheet (-ocr-test.png): the core tab is read again with every slot in all 5 treatments; one row per
+  slot, one column per treatment, each cell the picture the reader got with its words boxed in red,
+  the count it gave ("?" in orange) and its raw text, and a "read N/10" summary per treatment (also
+  in the diagnostics log). The files are saved independently: one failing doesn't stop the others.
 - The grid is pinned to two fixed parts of the inventory window that never animate: the sword
   button under the slots (the grid is a fixed offset above it) and the close cross at the top
   right (their distance checks the scale). No twitching between reads.

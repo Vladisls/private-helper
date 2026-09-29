@@ -149,7 +149,12 @@ namespace CAHelper
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Open farm log", null, (s, e) => Files.OpenInTextEditor(LogPath));
             m.Items.Add("Diagnostics: what the tracker decided", null, (s, e) => Files.OpenInTextEditor(DebugPath));
-            m.Items.Add("Diagnostics: last count strip (picture)", null, (s, e) => { var pth = Path.Combine(Dir, "cabal-helper-farm-digits-last.png"); PartyOcr.SaveLastStrip(pth); if (File.Exists(pth)) Files.OpenFolder(pth); else MessageBox.Show("No count read yet.", "Farm Tracker"); });
+            m.Items.Add("Diagnostics: last count strip (picture)", null, (s, e) =>
+            {
+                var pth = Path.Combine(Dir, "cabal-helper-farm-digits-last.png");
+                try { if (PartyOcr.SaveLastStrip(pth)) Files.OpenFolder(pth); else MessageBox.Show("No count read yet.", "Farm Tracker"); }
+                catch (Exception ex) { Debug($"count strip picture failed: {ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}"); MessageBox.Show("Could not save the picture: " + ex.Message, "Farm Tracker"); }
+            });
             m.Items.Add("Diagnostics: last inventory read (picture)", null, (s, e) => { if (File.Exists(InvShotPath)) Files.OpenFolder(InvShotPath); else MessageBox.Show("No inventory read yet.", "Farm Tracker"); });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Reset areas and everything learned…", null, (s, e) => ResetAll());
@@ -282,45 +287,109 @@ namespace CAHelper
         sealed class Restore : IDisposable { readonly Action a; public Restore(Action a) { this.a = a; } public void Dispose() => a(); }
 
         /// Screenshot of the screen with the debug drawings painted on it (the helper's own windows are invisible to
-        /// screen captures, so the snipping tool can't show them). Saved as cabal-helper-farm-view-N.png (last 5).
-        int viewSaves;
-        void SaveView()
+        /// screen captures, so the snipping tool can't show them). Saved as cabal-helper-farm-view-N.png (last 5),
+        /// with the last count read (-digits.png) and an OCR input experiment (-ocr-test.png): every count region
+        /// of the open inventory in all 5 treatments, each read by the text reader. Each file is saved on its own.
+        int viewSaves; bool savingView;
+        async void SaveView()
         {
+            if (savingView) return;
+            savingView = true;
+            viewSaves = (viewSaves + 1) % 5;
+            string path = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}.png");
+            string digitsPath = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}-digits.png");
+            string sheetPath = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}-ocr-test.png");
+            var saved = new List<string>(); var failed = new List<string>();
+            void Fail(string what, Exception ex) { failed.Add(what + ": " + ex.Message); Debug($"{what} failed: {ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}"); }
             try
             {
+                foreach (var p in new[] { path, digitsPath, sheetPath }) try { if (File.Exists(p)) File.Delete(p); } catch { }   // no stale file from 5 saves ago
                 bool hadOverlay = overlay != null;
-                if (!hadOverlay) { overlay = DebugOverlay.Create(); }
-                Probe(DateTime.Now.AddSeconds(5));                                   // refresh what the overlay shows
-                var screen = PartyOcr.PhysicalVirtualScreen();
-                using (var bmp = PartyOcr.Capture(screen))
-                using (var g = Graphics.FromImage(bmp))
+                try
                 {
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                    overlay.Render(g, -screen.X, -screen.Y);
-                    string label = $"Cabal Helper v{Updater.Short(Updater.Current)} · {DateTime.Now:yyyy-MM-dd HH:mm:ss} · {status.Text}";
-                    using (var f = new Font("Segoe UI", 11f, FontStyle.Bold))
-                    {
-                        var size = g.MeasureString(label, f);
-                        g.FillRectangle(new SolidBrush(Color.FromArgb(200, 0, 0, 0)), 8, 8, size.Width + 12, size.Height + 6);
-                        g.DrawString(label, f, Brushes.White, 14, 11);
-                    }
-                    viewSaves = (viewSaves + 1) % 5;
-                    string path = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}.png");
-                    bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-                    // also what the text reader last received for the counts, with its words and results
-                    string digitsPath = Path.Combine(Dir, $"cabal-helper-farm-view-{viewSaves}-digits.png");
-                    try { PartyOcr.SaveLastStrip(digitsPath); }
-                    catch (Exception ex) { Debug("digits picture failed: " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace); }
-                    Debug("view saved as " + Path.GetFileName(path) + (File.Exists(digitsPath) ? " + " + Path.GetFileName(digitsPath) : ""));
-                    Files.OpenFolder(path);
+                    if (!hadOverlay) overlay = DebugOverlay.Create();
+                    Probe(DateTime.Now.AddSeconds(5));                               // refresh what the overlay shows
+                    try { SaveScreenWithOverlay(path); saved.Add(path); }
+                    catch (Exception ex) { Fail("view picture", ex); }
                 }
-                if (!hadOverlay) { overlay.Close(); overlay.Dispose(); overlay = null; }
+                finally { if (!hadOverlay && overlay != null) { overlay.Close(); overlay.Dispose(); overlay = null; } }
+                // what the text reader last received for the counts, with its words and results
+                try { if (PartyOcr.SaveLastStrip(digitsPath)) saved.Add(digitsPath); }
+                catch (Exception ex) { Fail("digits picture", ex); }
+                // OCR input experiment on the inventory as it is now
+                List<(string label, Img region)> regions = null;
+                try { regions = CaptureCountRegions(out string why); if (regions == null) Debug("OCR test sheet skipped: " + why); }
+                catch (Exception ex) { Fail("OCR test capture", ex); }
+                if (regions != null)
+                {
+                    sheetBusy = true; Render();
+                    try
+                    {
+                        var summary = await PartyOcr.SaveOcrTestSheetAsync(sheetPath, regions);
+                        saved.Add(sheetPath);
+                        foreach (var line in summary) Debug("OCR test: " + line);
+                    }
+                    catch (Exception ex) { Fail("OCR test sheet", ex); }
+                    finally { sheetBusy = false; Render(); }
+                }
+                Debug("view saved: " + (saved.Count > 0 ? string.Join(" + ", saved.Select(Path.GetFileName)) : "nothing") + (failed.Count > 0 ? "; failed: " + string.Join("; ", failed) : ""));
+                if (saved.Count > 0) Files.OpenFolder(saved[0]);
+                if (failed.Count > 0 && !saved.Contains(path))
+                    MessageBox.Show("Could not save the image: " + string.Join("\n", failed) + "\n\nDetails are in Areas & learning > Diagnostics.", "Farm Tracker");
             }
             catch (Exception ex)
             {
-                Debug("save image failed: " + ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace);
+                Fail("save image", ex);
                 MessageBox.Show("Could not save the image: " + ex.Message + "\n\nDetails are in Areas & learning > Diagnostics.", "Farm Tracker");
             }
+            finally { savingView = false; }
+        }
+        bool sheetBusy;
+
+        /// All monitors with the overlay's drawings and a label on top, saved as png.
+        void SaveScreenWithOverlay(string path)
+        {
+            var screen = PartyOcr.PhysicalVirtualScreen();
+            using (var bmp = PartyOcr.Capture(screen))
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                overlay?.Render(g, -screen.X, -screen.Y);                             // screen can start at negative x/y
+                string label = $"Cabal Helper v{Updater.Short(Updater.Current)} · {DateTime.Now:yyyy-MM-dd HH:mm:ss} · {status.Text}";
+                using (var f = new Font("Segoe UI", 11f, FontStyle.Bold))
+                using (var bg = new SolidBrush(Color.FromArgb(200, 0, 0, 0)))
+                {
+                    var size = g.MeasureString(label, f);
+                    g.FillRectangle(bg, 8, 8, size.Width + 12, size.Height + 6);
+                    g.DrawString(label, f, Brushes.White, 14, 11);
+                }
+                bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+
+        /// The count region of every recognised core slot in the inventory as it is now, found the same way as the
+        /// preview read (Probe): pinned grid when the anchor works, else the best read. null (+ why) = no inventory.
+        List<(string label, Img region)> CaptureCountRegions(out string why)
+        {
+            var cap = InvCapture;
+            if (cap.Width <= 0 || cap.Height <= 0) { why = $"inventory area is off screen ({cap.Width}x{cap.Height})"; return null; }
+            Img img;
+            using (OverlayHidden())
+            using (var bmp = PartyOcr.Capture(cap)) img = PartyOcr.ToImg(bmp);
+            int top = invArea.Y - cap.Y;
+            var g = FarmCheck.FindGridNear(img, 0, top, img.W, invArea.Height, KnownPitch);
+            if (!FarmCheck.InventoryOpen(img, g)) { why = $"inventory not visible (contrast {g.Score:0.00}, needs 1.70)"; return null; }
+            var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult res);
+            var (g2, slots) = res.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, 8, 8, new Dictionary<(int, int), string>(slotIdentity))) : FarmCheck.BestRead(img, g, icons);
+            if (slots.Count == 0) { why = "no core slots recognised"; return null; }
+            var list = new List<(string, Img)>();
+            foreach (var sl in slots.OrderBy(x => x.Row * 8 + x.Col))
+            {
+                var region = FarmCheck.CountRegionImage(img, g2, sl.Row, sl.Col, out int n);
+                list.Add(($"{Short(sl.Item)} ({n} glyphs)", region == null || region.W <= 0 || region.H <= 0 ? null : region));
+            }
+            why = null;
+            return list;
         }
 
         void SetOverlay(bool on)
@@ -634,7 +703,8 @@ namespace CAHelper
                         if (changed)
                         {
                             stripSaves = (stripSaves + 1) % 5;
-                            PartyOcr.SaveLastStrip(Path.Combine(Dir, $"cabal-helper-farm-digits-{stripSaves}.png"));
+                            try { PartyOcr.SaveLastStrip(Path.Combine(Dir, $"cabal-helper-farm-digits-{stripSaves}.png")); }
+                            catch (Exception ex) { Debug($"count strip picture failed: {ex.GetType().FullName}: {ex.Message}\n{ex.StackTrace}", "stripfail"); }
                             try { frameNow.Save(Path.Combine(Dir, $"cabal-helper-farm-frame-{stripSaves}.png"), System.Drawing.Imaging.ImageFormat.Png); } catch { }
                             Debug($"count strip saved as cabal-helper-farm-digits-{stripSaves}.png (a count changed): " + string.Join(", ", slotsNow.Select(x => Short(x.Item) + "=" + (x.Count?.ToString() ?? "?"))));
                         }
@@ -815,6 +885,7 @@ namespace CAHelper
                 ? $"Session {Fmt(el)} · {runs.Count} runs · {dp} DP ({(el.TotalMinutes >= 1 ? (dp / hours).ToString("0") : "–")}/h)"
                 : runs.Count > 0 ? $"Last session: {runs.Count} runs, {dp} DP. Start a new one when you begin farming." : "Start a session when you begin farming. Open the core tab for a second at the start and the end.";
             if (warning != null && (DateTime.Now - warningAt).TotalSeconds < 10) st = warning;
+            if (sheetBusy) st = "Building OCR test sheet… (the text reader reads every count 5 ways)";
             if (status.Text != st) status.Text = st;
             var lines = new List<Ui.Line>();
             void Line(string t, Color col, bool bold = false) => lines.Add(new Ui.Line(t, col, bold));

@@ -531,6 +531,167 @@ namespace CAHelper
             return new Img(Math.Max(0, r.Width), Math.Max(0, r.Height), px);
         }
 
+        // ---------- count pictures for the text reader ----------
+        /// Prints a short text for a count picture: white on black, sized so its digits are `digitHeight` px tall.
+        /// Returns the picture and the y of its baseline. (GDI+ on Windows; tests pass a stand-in or null.)
+        public delegate (Img pic, int baseline) TextPrinter(string text, int digitHeight);
+
+        /// Words printed next to the count by some treatments. They are dropped before the count is taken, and none
+        /// contains a letter TrailingCount would turn into a digit (l, I, |, O, o).
+        public static readonly string[] CountPrintedWords = { "Qty", "Have", "pcs" };
+
+        /// The treatments of MakeCountVariants, in its order (the OCR test sheet's columns).
+        public static readonly string[] CountVariantNames = { "raw 3x", "prefix 2x", "inverted 3x", "white-isolated 3x", "context line 3x" };
+
+        /// The retry order of the normal count read (names from MakeCountVariants). The first that gives a count wins.
+        public static readonly string[] CountRetryOrder = { "context line 3x", "white-isolated 3x", "prefix 2x", "inverted 3x", "raw 3x" };
+
+        /// Five generic ways to present a count region (raw screen pixels) to the text reader. No font or digit
+        /// shapes: only enlarging, margins, grey/invert, a brightness-and-no-colour mask and printed plain words.
+        /// Each entry: name, picture, and where the count's own pixels sit in the picture (for mapping words back).
+        ///  raw 3x            enlarged 3x (bicubic), dark margin of 10 px * 3
+        ///  prefix 2x         enlarged 2x, margin, "Qty" printed in white before the digits
+        ///  inverted 3x       grey, inverted (dark digits on light), enlarged 3x, light margin
+        ///  white-isolated 3x only bright uncoloured pixels (min(r,g,b) >= 150, max-min < 70) as black on white, 3x
+        ///  context line 3x   enlarged 3x inside a printed line: "Have " + count + " pcs"
+        /// print = null leaves the printed words out (tests); the pictures are still made.
+        public static List<(string name, Img picture, Rectangle number)> MakeCountVariants(Img region, TextPrinter print = null)
+        {
+            if (region == null || region.W <= 0 || region.H <= 0) throw new ArgumentException($"count region is empty ({region?.W ?? 0}x{region?.H ?? 0})");
+            // digit rows (for sizing and aligning printed words): the rows with bright uncoloured pixels
+            int top = -1, bottom = -1;
+            for (int y = 0; y < region.H; y++) for (int x = 0; x < region.W; x++) if (BrightNeutral(region, x, y)) { if (top < 0) top = y; bottom = y + 1; break; }
+            if (top < 0) { top = 0; bottom = region.H; }
+            byte dark = 30, light = 255 - 30;
+            var gray = Map(region, (r, g, b) => { int v = (r + g + b) / 3; return ((byte)v, (byte)v, (byte)v); });
+            var inverted = Map(gray, (r, g, b) => ((byte)(255 - r), (byte)(255 - g), (byte)(255 - b)));
+            var isolated = Map(region, (r, g, b) => { int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b)); byte v = mn >= 150 && mx - mn < 70 ? (byte)0 : (byte)255; return (v, v, v); });
+            return new List<(string, Img, Rectangle)>
+            {
+                Compose(CountVariantNames[0], Enlarge(region, 3), 3, top, bottom, dark, null, null, print),
+                Compose(CountVariantNames[1], Enlarge(region, 2), 2, top, bottom, dark, "Qty", null, print),
+                Compose(CountVariantNames[2], Enlarge(inverted, 3), 3, top, bottom, light, null, null, print),
+                Compose(CountVariantNames[3], Enlarge(isolated, 3), 3, top, bottom, 255, null, null, print),
+                Compose(CountVariantNames[4], Enlarge(region, 3), 3, top, bottom, dark, "Have", "pcs", print),
+            };
+        }
+
+        static bool BrightNeutral(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b)); return mn >= 150 && mx - mn < 70; }
+
+        static Img Map(Img src, Func<int, int, int, (byte r, byte g, byte b)> f)
+        {
+            var px = new byte[src.W * src.H * 4];
+            for (int i = 0; i + 3 < px.Length; i += 4)
+            {
+                var (r, g, b) = f(src.Px[i + 2], src.Px[i + 1], src.Px[i]);
+                px[i] = b; px[i + 1] = g; px[i + 2] = r; px[i + 3] = 255;
+            }
+            return new Img(src.W, src.H, px);
+        }
+
+        /// Bicubic enlargement (Keys, a = -0.5), edges clamped. Opaque result.
+        public static Img Enlarge(Img src, int f)
+        {
+            if (f < 1) throw new ArgumentException("enlarge factor must be at least 1 (got " + f + ")");
+            if (src.W <= 0 || src.H <= 0) throw new ArgumentException($"image to enlarge is empty ({src.W}x{src.H})");
+            int W = src.W * f, H = src.H * f;
+            double K(double t) { t = Math.Abs(t); return t <= 1 ? (1.5 * t - 2.5) * t * t + 1 : t < 2 ? ((-0.5 * t + 2.5) * t - 4) * t + 2 : 0; }
+            // horizontal pass: src.H rows x W columns, 3 channels
+            var tmp = new double[src.H * W * 3];
+            for (int x = 0; x < W; x++)
+            {
+                double u = (x + 0.5) / f - 0.5; int x0 = (int)Math.Floor(u);
+                for (int k = -1; k <= 2; k++)
+                {
+                    double w = K(u - (x0 + k)); if (w == 0) continue;
+                    int sx = Math.Min(src.W - 1, Math.Max(0, x0 + k));
+                    for (int y = 0; y < src.H; y++)
+                    {
+                        int si = (y * src.W + sx) * 4, ti = (y * W + x) * 3;
+                        tmp[ti] += w * src.Px[si]; tmp[ti + 1] += w * src.Px[si + 1]; tmp[ti + 2] += w * src.Px[si + 2];
+                    }
+                }
+            }
+            var px = new byte[W * H * 4];
+            for (int y = 0; y < H; y++)
+            {
+                double v = (y + 0.5) / f - 0.5; int y0 = (int)Math.Floor(v);
+                for (int x = 0; x < W; x++)
+                {
+                    double c0 = 0, c1 = 0, c2 = 0;
+                    for (int k = -1; k <= 2; k++)
+                    {
+                        double w = K(v - (y0 + k)); if (w == 0) continue;
+                        int ti = (Math.Min(src.H - 1, Math.Max(0, y0 + k)) * W + x) * 3;
+                        c0 += w * tmp[ti]; c1 += w * tmp[ti + 1]; c2 += w * tmp[ti + 2];
+                    }
+                    int o = (y * W + x) * 4;
+                    px[o] = Clamp(c0); px[o + 1] = Clamp(c1); px[o + 2] = Clamp(c2); px[o + 3] = 255;
+                }
+            }
+            return new Img(W, H, px);
+        }
+        static byte Clamp(double v) => v <= 0 ? (byte)0 : v >= 255 ? (byte)255 : (byte)Math.Round(v);
+
+        /// Lays out one count picture: margin of 10 px * enlarge in `bg` grey, optional printed words before/after the
+        /// enlarged region, their baseline on the digits' bottom and their digit height the digits' height.
+        static (string, Img, Rectangle) Compose(string name, Img body, int f, int digitTop, int digitBottom, byte bg, string before, string after, TextPrinter print)
+        {
+            int pad = 10 * f, digitH = Math.Max(1, (digitBottom - digitTop) * f), baseY = digitBottom * f;
+            (Img pic, int baseline)? P(string t)
+            {
+                if (t == null || print == null) return null;
+                var p = print(t, digitH);
+                return p.pic == null || p.pic.W <= 0 || p.pic.H <= 0 ? ((Img, int)?)null : p;
+            }
+            var pre = P(before); var post = P(after);
+            int gap = (int)Math.Round(digitH * 0.6);                                  // about one space
+            // vertical: everything relative to the body's top; printed words sit on the digits' baseline
+            int minY = 0, maxY = body.H;
+            foreach (var t in new[] { pre, post }) if (t != null) { minY = Math.Min(minY, baseY - t.Value.baseline); maxY = Math.Max(maxY, baseY - t.Value.baseline + t.Value.pic.H); }
+            int preW = pre != null ? pre.Value.pic.W + gap : 0, postW = post != null ? post.Value.pic.W + gap : 0;
+            int W = pad + preW + body.W + postW + pad, H = pad + (maxY - minY) + pad;
+            if (W <= 0 || H <= 0) throw new InvalidOperationException($"count picture '{name}' would be empty ({W}x{H})");
+            var px = new byte[W * H * 4];
+            for (int i = 0; i < px.Length; i += 4) { px[i] = px[i + 1] = px[i + 2] = bg; px[i + 3] = 255; }
+            var outImg = new Img(W, H, px);
+            int bodyX = pad + preW, bodyY = pad - minY;
+            Blit(outImg, body, bodyX, bodyY, false);
+            if (pre != null) Blit(outImg, pre.Value.pic, pad, bodyY + baseY - pre.Value.baseline, true);
+            if (post != null) Blit(outImg, post.Value.pic, bodyX + body.W + gap, bodyY + baseY - post.Value.baseline, true);
+            return (name, outImg, new Rectangle(bodyX, bodyY, body.W, body.H));
+        }
+
+        /// Copies `src` into `dst` at (x, y); lighten = keep the brighter channel (white print on a dark margin).
+        static void Blit(Img dst, Img src, int x, int y, bool lighten)
+        {
+            for (int sy = 0; sy < src.H; sy++)
+            {
+                int dy = y + sy; if (dy < 0 || dy >= dst.H) continue;
+                for (int sx = 0; sx < src.W; sx++)
+                {
+                    int dx = x + sx; if (dx < 0 || dx >= dst.W) continue;
+                    int si = (sy * src.W + sx) * 4, di = (dy * dst.W + dx) * 4;
+                    for (int c = 0; c < 3; c++) dst.Px[di + c] = lighten ? Math.Max(dst.Px[di + c], src.Px[si + c]) : src.Px[si + c];
+                    dst.Px[di + 3] = 255;
+                }
+            }
+        }
+
+        /// The count in the reader's words for one count picture: printed words are dropped, only words that overlap
+        /// the count's own pixels (`number`) are kept, joined left to right, and the trailing run of digits is taken.
+        public static int? CountFromWords(IEnumerable<OcrWord> words, Rectangle number) => TrailingCount(CountText(words, number));
+
+        public static string CountText(IEnumerable<OcrWord> words, Rectangle number)
+        {
+            var keep = words.Where(w => w.Text != null && !CountPrintedWords.Any(p => string.Equals(w.Text.Trim().Trim(':', '.', ','), p, StringComparison.OrdinalIgnoreCase)))
+                            .Where(w => w.X < number.Right && w.X + w.W > number.X)
+                            .OrderBy(w => w.X).Select(w => w.Text);
+            var text = string.Join("", keep);
+            foreach (var p in CountPrintedWords) text = Regex.Replace(text, Regex.Escape(p), "", RegexOptions.IgnoreCase);
+            return text;
+        }
+
         /// A slot keeps its last identity while its icon still roughly resembles it (the shine moves the colour mix a
         /// little on every read); entering a new identity needs the strict match.
         public const double IconStayMax = 2.2;
