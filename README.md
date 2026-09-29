@@ -22,6 +22,7 @@ CA wait. When in doubt, ask a GA on the PlayCabal Discord.
 1. Download [`release/CabalHelper.exe`](https://github.com/Vladisls/private-helper/raw/main/release/CabalHelper.exe).
 2. Put it in its own folder, e.g. `C:\Games\CabalHelper\`, and double-click it.
    SmartScreen may say "unrecognized app": **More info > Run anyway** (the exe is not code-signed).
+3. On its first start it fetches the OCR package into `ocr\` next to the exe (see below). Nothing else to install.
 
 ## Updates
 
@@ -30,10 +31,34 @@ On every start the helper checks `release/version.txt` on the `main` branch. If 
 Tray icon > **Check for updates** does the same on demand. Turn it off with `AutoUpdate=false` in `cabal-helper.ini`.
 Settings, the to-do list and progress live next to the exe and are kept across updates.
 
+`version.txt` has three lines: the version, the SHA-256 of `CabalHelper.exe` and the SHA-256 of `release/ocr.zip`.
+After the exe check, if `ocr\ocr.sha` next to the exe is missing or different, the helper downloads `ocr.zip`, checks
+its SHA-256 (once more after 20 s if GitHub still serves the old file), unpacks it into `ocr\` (files that didn't
+change are left alone) and writes `ocr\ocr.sha`. The result shows in the start-up balloon; if it fails the helper
+starts anyway and the Farm Tracker uses Windows' text reader.
+
+## OCR package
+
+The Farm Tracker reads stack counts with [Tesseract](https://github.com/tesseract-ocr/tesseract) (Apache-2.0) in
+digits-only mode. It lives in the `ocr\` folder next to `CabalHelper.exe`, fetched by the updater (source: `ocr/` in
+this repo, zipped by `build.sh` into `release/ocr.zip`, about 7 MB):
+
+```
+ocr\Tesseract.dll                  .NET wrapper (Charles Weld, Tesseract NuGet 5.2.0)
+ocr\x64\, ocr\x86\                 tesseract50.dll + leptonica-1.82.0.dll (Tesseract 5.0, Leptonica 1.82)
+ocr\tessdata\eng.traineddata       English "fast" LSTM model (tessdata_fast)
+ocr\THIRD-PARTY.txt                licences (Apache-2.0, BSD, MIT, zlib/libpng/libjpeg-turbo/libtiff)
+ocr\ocr.sha                        written by the updater: which ocr.zip is installed
+```
+
+The native DLLs need the Microsoft Visual C++ 2015-2022 Redistributable, which most gaming PCs already have. Without
+the package (or if Tesseract can't start) the Farm Tracker falls back to Windows' text reader and says why in its
+diagnostics log ("count reader: ...").
+
 ## Publishing a new version
 
 ```
-./build.sh          # runs tests, bumps the patch version, builds release/CabalHelper.exe + version.txt
+./build.sh          # runs tests, bumps the patch version, builds release/CabalHelper.exe, ocr.zip + version.txt
 git add -A && git commit -m "..." && git push
 ```
 
@@ -127,28 +152,41 @@ FARM TRACKER
 - Stop session: if the core tab wasn't read in the last 10 s, the panel asks you to open it
   and stops by itself once the final counts are read ("Stop now" skips, 90 s timeout).
   Everything is written to cabal-helper-farm-log.csv next to the exe.
-- Stack counts come only from Windows' text reader, on a generic count region: the region is found
-  from the size and position of the digit glyphs only (anchored on the last digit, which never
-  touches the icon), its raw pixels are enlarged and read, and the count is the trailing run of
-  digits (icon remains the reader turns into characters sit on the left and are dropped). No digit
-  or font shapes are stored or matched, so a font change or another resolution doesn't matter.
-  A slot with no count drawn at all is a single item (1).
+- Stack counts are read by Tesseract in digits-only mode (the OCR package, see above); Windows'
+  text reader is the fallback when the package is missing. Both work on a generic count region:
+  the region is found from the size and position of the digit glyphs only (anchored on the last
+  digit, which never touches the icon). No digit or font shapes are stored or matched, so a font
+  change or another resolution doesn't matter. A slot with no count drawn at all is a single item (1).
+- Tesseract reads two pictures per slot, always both:
+  * B "digits-isolated 3x": only the pixels of the count's own glyphs (the right-aligned chain of
+    digit-sized outlined white shapes), black on white, enlarged 3x with a white margin; no icon
+    pixel at all. A first digit that touches the icon isn't in the chain, so "208" can come out as "08".
+  * A "raw 3x": the raw region enlarged 3x with a dark margin; the count is the trailing run of
+    digits (icon remains read as digits sit on the left and are dropped).
+  A read counts with 1-5 digits and a mean confidence of at least 40%. Only one reads: that one
+  ("tesseract A" / "tesseract B"). Both the same: "tesseract A+B agree". A is B with more digits in
+  front: A ("tesseract A (longer)"). Otherwise B, unless only A matches the glyph chain (as many digits
+  as glyphs, no leading zero): "tesseract disagree", logged with both values and confidences, and not
+  taken at once (the recent majority decides).
 - Diagnostics: when a count changes between reads, the strip the reader saw
   (cabal-helper-farm-digits-N.png) and the exact inventory frame (cabal-helper-farm-frame-N.png)
   are saved, last 5 of each.
 - A count shown as unreadable ("?"): Areas & learning > Diagnostics: last count strip shows what
-  the text reader saw and returned.
-- Each count region is shown to the reader in up to 5 treatments until one gives a count:
+  the reader saw and returned, and per slot which engine and picture gave the count (Tesseract's text
+  and confidence, or everything that was tried). The diagnostics log says which reader is in use.
+- Without Tesseract, each count region is shown to Windows' reader in up to 5 treatments until one gives a count:
   enlarged 3x as is ("raw 3x"), 2x with a printed "Qty" in front ("prefix 2x"), grey and
   inverted to dark digits on light ("inverted 3x"), only the bright uncoloured pixels as black on
   white ("white-isolated 3x"), and inside a printed line "Have <count> pcs" ("context line 3x").
   The count is taken only from the words over the region itself, so the printed words never count.
 - Save image (screen + debug lines) saves, next to the exe (last 5 of each): the screen with the
   debug drawings (cabal-helper-farm-view-N.png), the last count read (-digits.png) and an OCR test
-  sheet (-ocr-test.png): the core tab is read again with every slot in all 5 treatments; one row per
-  slot, one column per treatment, each cell the picture the reader got with its words boxed in red,
-  the count it gave ("?" in orange) and its raw text, and a "read N/10" summary per treatment (also
-  in the diagnostics log). The files are saved independently: one failing doesn't stop the others.
+  sheet (-ocr-test.png): the core tab is read again with every slot in Windows' 5 treatments plus
+  Tesseract's 2 pictures ("tesseract raw 3x", "tesseract digits-isolated 3x"); one row per slot, one
+  column per treatment, each cell the picture the reader got (Windows' words boxed in red), the count
+  it gave ("?" in orange) and its raw text (Tesseract: text and confidence), and a "read N/10" summary
+  per treatment (also in the diagnostics log). The files are saved independently: one failing doesn't
+  stop the others.
 - The grid is pinned to two fixed parts of the inventory window that never animate: the sword
   button under the slots (the grid is a fixed offset above it) and the close cross at the top
   right (their distance checks the scale). No twitching between reads.
@@ -191,7 +229,8 @@ PARTY CHECK (GDG party re-forms)
 - "Show what was read last time" and "Open last capture image" show exactly what the
   reader saw. Only the last capture is kept, in cabal-helper-party-last.png next to the exe.
 - Reading uses Windows' built-in text recognition: offline, free, nothing is sent anywhere.
-  It needs the English language (Settings > Time & language > Language).
+  It needs the English language (Settings > Time & language > Language). (Only the Farm Tracker's
+  stack counts use Tesseract, also offline.)
 - It only reads on your click. It never kicks, invites or presses anything in the game.
 
 SETTINGS WINDOW (tray > Settings, or the "+" menu)

@@ -32,7 +32,8 @@ namespace CAHelper
         public void Dispose() { if (active) try { SetThreadDpiAwarenessContext(old); } catch { } }
     }
 
-    /// Screenshot of one screen area + Windows' built-in text reader (Windows.Media.Ocr). Offline, no key.
+    /// Screenshot of one screen area + Windows' built-in text reader (Windows.Media.Ocr), offline, no key; stack counts
+    /// go to Tesseract (TessOcr) when the OCR package is installed.
     static class PartyOcr
     {
         public static string LastCapturePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cabal-helper-party-last.png");
@@ -93,7 +94,7 @@ namespace CAHelper
             return bmp;
         }
 
-        static byte[] Png(Bitmap b) { using (var ms = new MemoryStream()) { b.Save(ms, ImageFormat.Png); return ms.ToArray(); } }
+        internal static byte[] Png(Bitmap b) { using (var ms = new MemoryStream()) { b.Save(ms, ImageFormat.Png); return ms.ToArray(); } }
 
         /// Reads the area several ways (two cleanups + plain) and returns every read; the caller picks the best.
         public static async Task<(List<PartyRead> reads, string raw)> ReadAllAsync(Rectangle area)
@@ -238,34 +239,114 @@ namespace CAHelper
             finally { bmp.UnlockBits(d); }
         }
 
-        /// Windows' text reader is built for lines of text: a lone digit, a very short string or a big glyph with no
-        /// margin often returns nothing. So each count region is read on its own picture, in the treatments of
-        /// FarmCheck.MakeCountVariants (tried in FarmCheck.CountRetryOrder until one gives a count). The count is the
-        /// trailing run of digits among the words over the region itself, so printed words never interfere.
-        /// glyphCounts and names are for diagnostics.
-        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> glyphCounts, IList<string> names = null)
+        /// Reads each slot's count region. With the OCR package installed (TessOcr.Available) Tesseract reads it in
+        /// digits-only mode on both pictures, B digits-isolated (only the glyph chain's pixels, black on white: no icon
+        /// pixel at all) and A raw 3x, and FarmCheck.DecideTesseract picks the count (A when it is B with a leading
+        /// digit more, B on a real disagreement, which is logged and not confident); a read under 40% doesn't count. Without the package, Windows' text reader
+        /// reads it as before: its lines-of-text engine often returns nothing for a lone digit, so each region is shown
+        /// in the treatments of FarmCheck.MakeCountVariants (in FarmCheck.CountRetryOrder until one gives a count) and
+        /// the count is the trailing run of digits among the words over the region itself.
+        /// digits[i] is the slot's FarmCheck.DigitsMask (null = raw picture only); glyphCounts and names are also for
+        /// diagnostics. Which engine and picture gave each count is kept for SaveLastStrip and LastCountSources.
+        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> glyphCounts, IList<string> names = null, IList<Img> digits = null)
         {
             var result = new int?[strips.Count];
+            var sources = new string[strips.Count];
+            var confident = new bool[strips.Count];
+            var disagreements = new List<string>();
             var diag = new List<CountDiag>();
+            bool tess = await Task.Run(() => TessOcr.Available);          // the first call loads the engine: off the UI thread
             for (int i = 0; i < strips.Count; i++)
             {
                 if (strips[i] == null || strips[i].W <= 0 || strips[i].H <= 0) continue;
-                string label = names != null && i < names.Count ? names[i] + $" ({(i < glyphCounts.Count ? glyphCounts[i] : 0)} glyphs)" : $"band {i}";
-                var variants = FarmCheck.MakeCountVariants(strips[i], PrintText)
-                    .OrderBy(v => { int k = Array.IndexOf(FarmCheck.CountRetryOrder, v.name); return k < 0 ? int.MaxValue : k; }).ToList();
+                int glyphs = i < glyphCounts.Count ? glyphCounts[i] : 0;
+                string label = names != null && i < names.Count ? names[i] + $" ({glyphs} glyphs)" : $"band {i}";
                 CountDiag keep = null;
-                foreach (var v in variants)
+                bool tessBroken = false;                                   // every Tesseract read threw: Windows' reader takes this slot
+                if (tess)
                 {
-                    var words = await ReadImgWordsAsync(v.picture);
-                    var got = FarmCheck.CountFromWords(words, v.number);
-                    if (keep == null || got.HasValue) keep = new CountDiag { Name = label, Pic = v.picture, Words = words, Got = got, Variant = got.HasValue ? v.name : "none of " + variants.Count };
-                    if (got.HasValue) { result[i] = got; break; }
+                    // both pictures are always read; FarmCheck.DecideTesseract picks the count
+                    var inputs = TesseractInputs(strips[i], digits != null && i < digits.Count ? digits[i] : null);
+                    var reads = new List<(string name, Img picture, bool isolated, (int? got, string text, float conf, string note, bool error) r)>();
+                    foreach (var input in inputs) reads.Add((input.name, input.picture, input.isolated, await ReadTesseractAsync(input.picture, input.isolated, glyphs)));
+                    var ra = reads.FirstOrDefault(x => !x.isolated); var rb = reads.FirstOrDefault(x => x.isolated);
+                    var (count, source, sure) = FarmCheck.DecideTesseract(ra.name != null && !ra.r.error ? ra.r.text : null, ra.r.conf,
+                                                                          rb.name != null && !rb.r.error ? rb.r.text : null, rb.r.conf, glyphs);
+                    string what = string.Join("; ", reads.Select(x => (x.isolated ? "B " : "A ") + x.r.note));
+                    // the picture shown: B when it gave the count (or nothing did), else A
+                    bool showA = source == FarmCheck.TessA || source == FarmCheck.TessALonger || (source == FarmCheck.TessDisagree && rb.name != null && count != rb.r.got);
+                    var shown = showA || rb.name == null ? ra : rb;
+                    keep = new CountDiag { Name = label, Pic = shown.picture, Words = new List<OcrWord>(), Got = count, Engine = count.HasValue ? source : "none",
+                                           Variant = (count.HasValue ? source : "tesseract, nothing read") + (count.HasValue && !sure ? " (not confident)" : "") + ": " + what };
+                    result[i] = count; confident[i] = count.HasValue && sure;
+                    if (source == FarmCheck.TessDisagree) disagreements.Add($"{label}: A {ra.r.note} vs B {rb.r.note}, used {count}");
+                    tessBroken = reads.Count > 0 && reads.All(x => x.r.error);
+                    if (tessBroken) { keep = null; result[i] = null; }
                 }
-                if (keep != null) diag.Add(keep);
+                if (!tess || tessBroken)
+                {
+                    var variants = FarmCheck.MakeCountVariants(strips[i], PrintText)
+                        .OrderBy(v => { int k = Array.IndexOf(FarmCheck.CountRetryOrder, v.name); return k < 0 ? int.MaxValue : k; }).ToList();
+                    foreach (var v in variants)
+                    {
+                        var words = await ReadImgWordsAsync(v.picture);
+                        var got = FarmCheck.CountFromWords(words, v.number);
+                        if (keep == null || got.HasValue) keep = new CountDiag { Name = label, Pic = v.picture, Words = words, Got = got, Variant = got.HasValue ? "windows " + v.name : "windows, none of " + variants.Count, Engine = got.HasValue ? "windows " + v.name : "none" };
+                        if (got.HasValue) { result[i] = got; confident[i] = true; break; }
+                    }
+                }
+                if (keep != null) { diag.Add(keep); sources[i] = keep.Engine; }
             }
-            lock (DiagLock) LastDiag = diag;
+            lock (DiagLock) { LastDiag = diag; LastSources = sources; LastConfident = confident; LastDisagreements = disagreements; }
             return result;
         }
+
+        /// The two Tesseract inputs of a count region: B digits-isolated (when the slot has a digits mask) and A raw 3x.
+        static List<(string name, Img picture, bool isolated)> TesseractInputs(Img region, Img digitsMask)
+        {
+            var list = new List<(string, Img, bool)>();
+            if (digitsMask != null && digitsMask.W > 0 && digitsMask.H > 0) list.Add((FarmCheck.TessDigitsName, FarmCheck.DigitsIsolatedPicture(digitsMask), true));
+            list.Add((FarmCheck.TessRawName, FarmCheck.RawCountPicture(region), false));
+            return list;
+        }
+
+        /// One Tesseract read of a count picture: the count it gives on its own (null = not read) and a note with the
+        /// text, the confidence and whether it matches the glyph chain. Errors become a note, never an exception.
+        static async Task<(int? got, string text, float conf, string note, bool error)> ReadTesseractAsync(Img picture, bool isolated, int glyphs)
+        {
+            try
+            {
+                var (text, conf) = await Task.Run(() => TessOcr.Read(picture));
+                int? got = FarmCheck.TesseractCount(text, conf, isolated);
+                string note = "\"" + text + "\" " + conf.ToString("P0", CultureInfo.InvariantCulture);
+                if (got == null && conf < FarmCheck.TessMinConfidence && text.Length > 0) note += " (under " + FarmCheck.TessMinConfidence.ToString("P0", CultureInfo.InvariantCulture) + ")";
+                if (got.HasValue && isolated && !FarmCheck.AcceptIsolatedCount(FarmCheck.TesseractDigits(text, conf, true), glyphs)) note += $" (chain has {glyphs} glyphs)";
+                return (got, text, conf, note, false);
+            }
+            catch (Exception ex) { return (null, "", 0f, "error: " + ex.GetType().Name + ": " + ex.Message, true); }
+        }
+
+        /// Per slot of the last read: false when the count must not replace the smoother's history at once (Tesseract's
+        /// two pictures disagreed, or only B read and it doesn't match the glyph chain) or nothing was read.
+        public static bool[] LastCountConfident() { lock (DiagLock) return (bool[])LastConfident.Clone(); }
+
+        /// The slots where Tesseract's two pictures disagreed in the last read, with both values and confidences.
+        public static List<string> LastCountDisagreements() { lock (DiagLock) return LastDisagreements.ToList(); }
+
+        /// Which engine and picture gave each slot's count in the last read ("none" = unreadable, null = no region).
+        public static string[] LastCountSources() { lock (DiagLock) return (string[])LastSources.Clone(); }
+
+        /// "tesseract digits-isolated 3x 7, tesseract raw 3x 2, none 1" for the last read.
+        public static string LastCountSourceSummary()
+        {
+            var s = LastCountSources().Where(x => x != null).GroupBy(x => x).Select(g => g.Key + " " + g.Count());
+            return string.Join(", ", s);
+        }
+
+        /// Which reader the counts use now, for the diagnostics log.
+        public static string CountEngineStatus => TessOcr.Available
+            ? "Tesseract (digits only, from " + TessOcr.OcrDir + ")"
+            : "Windows' text reader (Tesseract not available: " + TessOcr.LastError + ")";
 
         /// All words the reader finds on a picture (in the picture's pixels), left to right per line.
         static async Task<List<OcrWord>> ReadImgWordsAsync(Img picture)
@@ -305,9 +386,12 @@ namespace CAHelper
 
         /// What the last count read looked like, per slot: the picture the reader got, its words, the result, the
         /// treatment. Pictures are kept as Img (plain pixel arrays), so nothing here can be disposed while in use.
-        public sealed class CountDiag { public string Name; public Img Pic; public List<OcrWord> Words; public int? Got; public string Variant; }
+        public sealed class CountDiag { public string Name; public Img Pic; public List<OcrWord> Words; public int? Got; public string Variant; public string Engine; }
         static readonly object DiagLock = new object();
         static List<CountDiag> LastDiag = new List<CountDiag>();
+        static string[] LastSources = new string[0];
+        static bool[] LastConfident = new bool[0];
+        static List<string> LastDisagreements = new List<string>();
 
         /// Saves the last count read for diagnostics: per slot the name, result and treatment, the picture the reader
         /// received, and the same picture with the reader's words boxed. Returns false if there was nothing to save.
@@ -317,18 +401,22 @@ namespace CAHelper
             lock (DiagLock) diag = LastDiag.ToList();
             diag = diag.Where(d => d.Pic != null && d.Pic.W > 0 && d.Pic.H > 0).ToList();
             if (diag.Count == 0) return false;
-            const int labelW = 300, gap = 8;
-            int picW = diag.Max(d => d.Pic.W), totalH = diag.Sum(d => Math.Max(d.Pic.H, 20) + gap);
-            using (var bmp = NewBitmap(labelW + picW * 2 + 30, Math.Max(totalH, 20), "count strip picture"))
+            const int labelW = 340, gap = 8, minRowH = 40;
+            int picW = diag.Max(d => d.Pic.W), totalH = diag.Sum(d => Math.Max(d.Pic.H, minRowH) + gap);
+            using (var bmp = NewBitmap(labelW + picW * 2 + 30, Math.Max(totalH, minRowH), "count strip picture"))
             using (var g = Graphics.FromImage(bmp))
             using (var f = new Font("Segoe UI", 9f, FontStyle.Bold))
+            using (var fSmall = new Font("Segoe UI", 8f, FontStyle.Regular))
+            using (var muted = new SolidBrush(Color.FromArgb(190, 190, 190)))
             {
                 g.Clear(Color.FromArgb(40, 40, 40));
                 int y = 0;
                 foreach (var d in diag)
                 {
                     string got = d.Got.HasValue ? d.Got.Value.ToString(CultureInfo.InvariantCulture) : "?";
-                    g.DrawString($"{d.Name}  →  {got}   [{d.Variant}]", f, got == "?" ? Brushes.OrangeRed : Brushes.White, 4, y + 2);
+                    g.DrawString($"{d.Name}  →  {got}", f, got == "?" ? Brushes.OrangeRed : Brushes.White, 4, y + 2);
+                    // which engine and picture gave the count (or everything that was tried), wrapped under the name
+                    g.DrawString(d.Variant ?? "", fSmall, muted, new RectangleF(4, y + 20, labelW - 8, Math.Max(d.Pic.H, minRowH) - 20));
                     using (var pic = FromImg(d.Pic))
                     {
                         g.DrawImageUnscaled(pic, labelW, y); g.DrawImageUnscaled(pic, labelW + picW + 10, y);
@@ -338,7 +426,7 @@ namespace CAHelper
                         var r = new Rectangle(labelW + picW + 10 + (int)w.X, y + (int)w.Y, Math.Max(1, (int)w.W), Math.Max(1, (int)w.H));
                         g.DrawRectangle(Pens.Red, r); g.DrawString(w.Text, f, Brushes.Red, r.Right + 2, r.Top);
                     }
-                    y += Math.Max(d.Pic.H, 20) + gap;
+                    y += Math.Max(d.Pic.H, minRowH) + gap;
                 }
                 bmp.Save(path, ImageFormat.Png);
             }
@@ -353,82 +441,114 @@ namespace CAHelper
             return new Bitmap(w, h, PixelFormat.Format32bppArgb);
         }
 
-        /// OCR input experiment: every count region in every treatment of FarmCheck.MakeCountVariants, each read by the
-        /// text reader. Saves a sheet: one row per slot, one column per treatment; each cell shows the picture with the
-        /// reader's words boxed in red, the parsed count ("?" in orange) and the raw text. Last row: read N/M per
-        /// treatment. Returns one summary line per treatment.
-        public static async Task<List<string>> SaveOcrTestSheetAsync(string path, IList<(string label, Img region)> slots)
+        /// OCR input experiment: every count region in every treatment of FarmCheck.MakeCountVariants read by Windows'
+        /// text reader, plus the two Tesseract inputs (raw 3x, digits-isolated 3x) read by Tesseract. Saves a sheet: one
+        /// row per slot, one column per treatment; each cell shows the picture (Windows' words boxed in red), the parsed
+        /// count ("?" in orange) and the raw text (Tesseract: text and confidence, and why a read was refused). Last
+        /// row: read N/M per treatment. Returns one summary line per treatment (and why Tesseract is missing, if it is).
+        public static async Task<List<string>> SaveOcrTestSheetAsync(string path, IList<(string label, Img region, Img digits, int glyphs)> slots)
         {
-            var names = FarmCheck.CountVariantNames;
+            var names = FarmCheck.CountVariantNames.Concat(new[] { FarmCheck.TessRawName, FarmCheck.TessDigitsName }).ToArray();
+            bool tess = await Task.Run(() => TessOcr.Available);
             var rows = new List<(string label, List<(Img pic, List<OcrWord> words, string raw, int? got)> cells)>();
-            foreach (var (label, region) in slots)
+            foreach (var (label, region, digitsMask, glyphs) in slots)
             {
                 var cells = new List<(Img, List<OcrWord>, string, int?)>();
                 if (region != null && region.W > 0 && region.H > 0)
+                {
                     foreach (var v in FarmCheck.MakeCountVariants(region, PrintText))
                     {
                         List<OcrWord> words; string raw; int? got;
                         try
                         {
                             words = await ReadImgWordsAsync(v.picture);
-                            raw = string.Join(" ", words.Select(w => w.Text));
+                            raw = "\"" + string.Join(" ", words.Select(w => w.Text)) + "\"";
                             got = FarmCheck.CountFromWords(words, v.number);
                         }
                         catch (Exception ex) { words = new List<OcrWord>(); raw = "error: " + ex.GetType().Name + ": " + ex.Message; got = null; }
                         cells.Add((v.picture, words, raw, got));
                     }
+                    // Tesseract columns, in the sheet's order: raw 3x, then digits-isolated 3x
+                    var inputs = TesseractInputs(region, digitsMask);
+                    foreach (var name in new[] { FarmCheck.TessRawName, FarmCheck.TessDigitsName })
+                    {
+                        int k = inputs.FindIndex(x => x.name == name);
+                        if (k < 0) { cells.Add((BlankPicture(region), new List<OcrWord>(), "no digits found", null)); continue; }
+                        var input = inputs[k];
+                        if (!tess) { cells.Add((input.picture, new List<OcrWord>(), "Tesseract not available", null)); continue; }
+                        var r = await ReadTesseractAsync(input.picture, input.isolated, glyphs);
+                        cells.Add((input.picture, new List<OcrWord>(), r.note, r.got));
+                    }
+                }
                 rows.Add((label, cells));
             }
             int withRegion = rows.Count(r => r.cells.Count > 0);
             var readPer = names.Select((n, j) => rows.Count(r => j < r.cells.Count && r.cells[j].got.HasValue)).ToArray();
             var summary = names.Select((n, j) => $"{n}: read {readPer[j]}/{withRegion}" +
                 (withRegion > 0 ? " (" + string.Join(", ", rows.Where(r => j < r.cells.Count).Select(r => r.cells[j].got?.ToString(CultureInfo.InvariantCulture) ?? "?")) + ")" : "")).ToList();
+            if (!tess) summary.Add("tesseract: not available: " + TessOcr.LastError);
 
             const int pad = 8, lineH = 18, labelW = 230, headerH = 30, minCellW = 150;
-            var colW = names.Select((n, j) => Math.Max(minCellW, rows.Where(r => j < r.cells.Count).Select(r => r.cells[j].pic.W).DefaultIfEmpty(0).Max()) + 2 * pad).ToArray();
-            var rowH = rows.Select(r => Math.Max(lineH * 2, r.cells.Select(c => c.pic.H).DefaultIfEmpty(0).Max()) + 2 * lineH + 2 * pad).ToArray();
-            int W = labelW + colW.Sum(), H = headerH + rowH.Sum() + (lineH + 2 * pad);
-            using (var bmp = NewBitmap(W, H, "OCR test sheet"))
-            using (var g = Graphics.FromImage(bmp))
             using (var f = new Font("Segoe UI", 9f, FontStyle.Bold))
-            using (var fSmall = new Font("Segoe UI", 8f, FontStyle.Regular))
-            using (var line = new Pen(Color.FromArgb(80, 80, 80)))
-            using (var orange = new SolidBrush(Color.Orange))
-            using (var muted = new SolidBrush(Color.FromArgb(190, 190, 190)))
-            using (var red = new Pen(Color.Red, 1))
-            using (var clip = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             {
-                g.Clear(Color.FromArgb(28, 28, 28));
-                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                g.DrawString("slot (glyphs)", f, Brushes.White, pad, pad);
-                for (int j = 0, x = labelW; j < names.Length; x += colW[j], j++) g.DrawString(names[j], f, Brushes.White, x + pad, pad);
-                g.DrawLine(line, 0, headerH - 1, W, headerH - 1);
-                int y = headerH;
-                for (int i = 0; i < rows.Count; i++)
+                // column width: the widest picture, and never narrower than its header
+                int[] headerW;
+                using (var probe = new Bitmap(1, 1, PixelFormat.Format32bppArgb))
+                using (var pg = Graphics.FromImage(probe)) headerW = names.Select(n => (int)Math.Ceiling(pg.MeasureString(n, f).Width)).ToArray();
+                var colW = names.Select((n, j) => Math.Max(Math.Max(minCellW, headerW[j]), rows.Where(r => j < r.cells.Count).Select(r => r.cells[j].pic.W).DefaultIfEmpty(0).Max()) + 2 * pad).ToArray();
+                var rowH = rows.Select(r => Math.Max(lineH * 2, r.cells.Select(c => c.pic.H).DefaultIfEmpty(0).Max()) + 2 * lineH + 2 * pad).ToArray();
+                int W = labelW + colW.Sum(), H = headerH + rowH.Sum() + (lineH + 2 * pad);
+                using (var bmp = NewBitmap(W, H, "OCR test sheet"))
+                using (var g = Graphics.FromImage(bmp))
+                using (var fSmall = new Font("Segoe UI", 8f, FontStyle.Regular))
+                using (var line = new Pen(Color.FromArgb(80, 80, 80)))
+                using (var sep = new Pen(Color.FromArgb(150, 150, 150), 2))
+                using (var orange = new SolidBrush(Color.Orange))
+                using (var muted = new SolidBrush(Color.FromArgb(190, 190, 190)))
+                using (var red = new Pen(Color.Red, 1))
+                using (var clip = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
                 {
-                    var (label, cells) = rows[i];
-                    g.DrawString(label, f, Brushes.White, new RectangleF(pad, y + pad, labelW - 2 * pad, rowH[i] - 2 * pad));
-                    if (cells.Count == 0) g.DrawString("no count region", fSmall, muted, labelW + pad, y + pad);
-                    for (int j = 0, x = labelW; j < cells.Count && j < colW.Length; x += colW[j], j++)
+                    g.Clear(Color.FromArgb(28, 28, 28));
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    g.DrawString("slot (glyphs)", f, Brushes.White, pad, pad);
+                    for (int j = 0, x = labelW; j < names.Length; x += colW[j], j++) g.DrawString(names[j], f, Brushes.White, x + pad, pad);
+                    g.DrawLine(line, 0, headerH - 1, W, headerH - 1);
+                    int y = headerH;
+                    for (int i = 0; i < rows.Count; i++)
                     {
-                        var (pic, words, raw, got) = cells[j];
-                        using (var b = FromImg(pic)) g.DrawImageUnscaled(b, x + pad, y + pad);
-                        foreach (var w in words) g.DrawRectangle(red, x + pad + (int)w.X, y + pad + (int)w.Y, Math.Max(1, (int)w.W), Math.Max(1, (int)w.H));
-                        int ty = y + pad + Math.Max(lineH * 2, cells.Select(c => c.pic.H).Max());
-                        if (got.HasValue) g.DrawString("→ " + got.Value.ToString(CultureInfo.InvariantCulture), f, Brushes.White, x + pad, ty);
-                        else g.DrawString("?", f, orange, x + pad, ty);
-                        g.DrawString("\"" + raw + "\"", fSmall, muted, new RectangleF(x + pad, ty + lineH, colW[j] - 2 * pad, lineH), clip);
+                        var (label, cells) = rows[i];
+                        g.DrawString(label, f, Brushes.White, new RectangleF(pad, y + pad, labelW - 2 * pad, rowH[i] - 2 * pad));
+                        if (cells.Count == 0) g.DrawString("no count region", fSmall, muted, labelW + pad, y + pad);
+                        for (int j = 0, x = labelW; j < cells.Count && j < colW.Length; x += colW[j], j++)
+                        {
+                            var (pic, words, raw, got) = cells[j];
+                            using (var b = FromImg(pic)) g.DrawImageUnscaled(b, x + pad, y + pad);
+                            foreach (var w in words) g.DrawRectangle(red, x + pad + (int)w.X, y + pad + (int)w.Y, Math.Max(1, (int)w.W), Math.Max(1, (int)w.H));
+                            int ty = y + pad + Math.Max(lineH * 2, cells.Select(c => c.pic.H).Max());
+                            if (got.HasValue) g.DrawString("→ " + got.Value.ToString(CultureInfo.InvariantCulture), f, Brushes.White, x + pad, ty);
+                            else g.DrawString("?", f, orange, x + pad, ty);
+                            g.DrawString(raw, fSmall, muted, new RectangleF(x + pad, ty + lineH, colW[j] - 2 * pad, lineH), clip);
+                        }
+                        y += rowH[i];
+                        g.DrawLine(line, 0, y - 1, W, y - 1);
                     }
-                    y += rowH[i];
-                    g.DrawLine(line, 0, y - 1, W, y - 1);
+                    g.DrawString("summary", f, Brushes.White, pad, y + pad);
+                    for (int j = 0, x = labelW; j < names.Length; x += colW[j], j++)
+                        g.DrawString($"read {readPer[j]}/{withRegion}", f, readPer[j] == withRegion && withRegion > 0 ? Brushes.LightGreen : orange, x + pad, y + pad);
+                    int tessStart = FarmCheck.CountVariantNames.Length;
+                    for (int j = 0, x = labelW; j < colW.Length; x += colW[j], j++) g.DrawLine(j == tessStart ? sep : line, x, 0, x, H);   // Windows | Tesseract
+                    bmp.Save(path, ImageFormat.Png);
                 }
-                g.DrawString("summary", f, Brushes.White, pad, y + pad);
-                for (int j = 0, x = labelW; j < names.Length; x += colW[j], j++)
-                    g.DrawString($"read {readPer[j]}/{withRegion}", f, readPer[j] == withRegion && withRegion > 0 ? Brushes.LightGreen : orange, x + pad, y + pad);
-                for (int j = 0, x = labelW; j < colW.Length; x += colW[j], j++) g.DrawLine(line, x, 0, x, H);
-                bmp.Save(path, ImageFormat.Png);
             }
             return summary;
+        }
+
+        /// A white picture the size of the raw 3x one, for a cell with nothing to show.
+        static Img BlankPicture(Img region)
+        {
+            int w = region.W * 3 + 60, h = region.H * 3 + 60; var px = new byte[w * h * 4];
+            for (int i = 0; i < px.Length; i++) px[i] = 255;
+            return new Img(w, h, px);
         }
 
         static Windows.Media.Ocr.OcrEngine CreateEngine()
@@ -440,6 +560,107 @@ namespace CAHelper
             }
             catch { }
             return Windows.Media.Ocr.OcrEngine.TryCreateFromUserProfileLanguages();
+        }
+    }
+
+    /// Tesseract (Apache-2.0, via Charles Weld's .NET wrapper) in digits-only mode for the Farm Tracker's stack counts.
+    /// Everything it needs is in the OCR package, ocr\ next to the exe (fetched by the updater): the managed
+    /// Tesseract.dll, the native DLLs in ocr\x64 and ocr\x86 and the language data ocr\tessdata\eng.traineddata
+    /// (tessdata_fast, LSTM only). One engine is made on first use; if that fails, Available is false, LastError says
+    /// why (logged once by the Farm Tracker) and the counts go to Windows' text reader instead.
+    /// Nothing here touches a Tesseract type: that is all in TessNative, so a missing Tesseract.dll can only fail
+    /// inside the try below, never when this class is loaded.
+    static class TessOcr
+    {
+        static readonly object Lock = new object();
+        static bool tried;
+        static object engine;                                             // a Tesseract.TesseractEngine
+        public static string LastError { get; private set; } = "not tried yet";
+        public static string OcrDir => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ocr");
+        static string Platform => IntPtr.Size == 8 ? "x64" : "x86";
+
+        public static bool Available { get { Ensure(); return engine != null; } }
+
+        static void Ensure()
+        {
+            lock (Lock)
+            {
+                if (tried) return;
+                tried = true;
+                try
+                {
+                    string dir = OcrDir, native = Path.Combine(dir, Platform);
+                    var missing = new List<string>();
+                    if (!File.Exists(Path.Combine(dir, "tessdata", "eng.traineddata"))) missing.Add(@"ocr\tessdata\eng.traineddata");
+                    if (!Directory.Exists(native) || Directory.GetFiles(native, "*.dll").Length == 0) missing.Add(@"ocr\" + Platform + @"\*.dll");
+                    if (!File.Exists(Path.Combine(dir, "Tesseract.dll")) && !File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tesseract.dll"))) missing.Add(@"ocr\Tesseract.dll");
+                    if (missing.Count > 0) throw new FileNotFoundException("OCR package not installed or incomplete, missing " + string.Join(", ", missing) + " (restart the helper with auto-update on to fetch it)");
+                    AppDomain.CurrentDomain.AssemblyResolve += ResolveTesseract;
+                    engine = TessNative.Create(dir);
+                    LastError = null;
+                }
+                catch (Exception ex) { engine = null; LastError = Describe(ex); }
+            }
+        }
+
+        /// The CLR looks for Tesseract.dll next to the exe only; ours is in ocr\.
+        static System.Reflection.Assembly ResolveTesseract(object sender, ResolveEventArgs e)
+        {
+            if (!string.Equals(new System.Reflection.AssemblyName(e.Name).Name, "Tesseract", StringComparison.OrdinalIgnoreCase)) return null;
+            string p = Path.Combine(OcrDir, "Tesseract.dll");
+            return File.Exists(p) ? System.Reflection.Assembly.LoadFrom(p) : null;
+        }
+
+        static string Describe(Exception ex)
+        {
+            while ((ex is System.Reflection.TargetInvocationException || ex is TypeInitializationException) && ex.InnerException != null) ex = ex.InnerException;
+            string msg = ex.GetType().Name + ": " + ex.Message;
+            // the wrapper reports "Failed to find library" also when the file is there but Windows can't load it
+            if (ex is DllNotFoundException || ex.Message.IndexOf("Failed to find library", StringComparison.OrdinalIgnoreCase) >= 0)
+                msg += $" (the DLLs are in ocr\\{Platform}; if Windows still can't load them, the Microsoft Visual C++ 2015-2022 Redistributable ({Platform}) is missing: https://aka.ms/vs/17/release/vc_redist.{Platform}.exe)";
+            else if (ex.Message.IndexOf("initialise", StringComparison.OrdinalIgnoreCase) >= 0)
+                msg += @" (check ocr\tessdata\eng.traineddata)";
+            return msg;
+        }
+
+        /// Reads one picture: Tesseract's text (digits only, one line) and its mean confidence (0..1).
+        public static (string text, float confidence) Read(Img picture)
+        {
+            Ensure();
+            if (engine == null) throw new InvalidOperationException("Tesseract is not available: " + LastError);
+            byte[] png;
+            using (var bmp = PartyOcr.FromImg(picture)) png = PartyOcr.Png(bmp);
+            lock (Lock) return TessNative.Read(engine, png);           // one engine, one page at a time
+        }
+    }
+
+    /// The only code that uses Tesseract types (JIT-compiled only after TessOcr set up the assembly lookup).
+    static class TessNative
+    {
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        public static object Create(string ocrDir)
+        {
+            // The wrapper appends x64 / x86 to this path itself and checks it before the exe's folder.
+            global::Tesseract.TesseractEnviornment.CustomSearchPath = ocrDir;
+            // tessdata_fast has only the LSTM model, so LstmOnly (Default would pick it too)
+            var e = new global::Tesseract.TesseractEngine(Path.Combine(ocrDir, "tessdata"), "eng", global::Tesseract.EngineMode.LstmOnly);
+            try
+            {
+                if (!e.SetVariable("tessedit_char_whitelist", "0123456789")) throw new InvalidOperationException("Tesseract refused the digits-only setting");
+                e.SetVariable("user_defined_dpi", "300");                   // our pictures carry no DPI; avoids the 70 dpi guess
+                e.DefaultPageSegMode = global::Tesseract.PageSegMode.SingleLine;   // PSM 7: the picture is one line of text
+                return e;
+            }
+            catch { e.Dispose(); throw; }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        public static (string text, float confidence) Read(object engine, byte[] png)
+        {
+            var e = (global::Tesseract.TesseractEngine)engine;
+            using (var pix = global::Tesseract.Pix.LoadFromMemory(png))
+            using (var page = e.Process(pix, global::Tesseract.PageSegMode.SingleLine))
+                return ((page.GetText() ?? "").Trim(), page.GetMeanConfidence());
         }
     }
 

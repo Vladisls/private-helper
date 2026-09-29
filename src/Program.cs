@@ -27,18 +27,30 @@ namespace CAHelper
 
                 Updater.CleanupOld();
                 var settings = Settings.Load(out _);
-                if (justUpdated) StartupMessage = "Updated to v" + Updater.Short(Updater.Current);
+                if (justUpdated)
+                {
+                    StartupMessage = "Updated to v" + Updater.Short(Updater.Current);
+                    // the copy that downloaded this exe didn't touch the OCR package: check it now
+                    if (settings.AutoUpdate) AddStartupMessage(Updater.CheckOcrPackage(settings.UpdateUrl, 4000));
+                }
                 else if (settings.AutoUpdate)
                 {
-                    var r = Updater.CheckAndApply(settings.UpdateUrl, 4000, out string msg);
+                    var r = Updater.CheckAndApply(settings.UpdateUrl, 4000, out string msg, out string ocrMsg);
                     if (r == Updater.Result.Updated) { mutex.ReleaseMutex(); Updater.Restart(); return; }
                     if (r == Updater.Result.Failed) StartupMessage = msg;   // offline etc.: start normally, say why
+                    AddStartupMessage(ocrMsg);                              // OCR package installed / failed (never stops the start)
                 }
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new HelperContext());
             }
+        }
+
+        static void AddStartupMessage(string msg)
+        {
+            if (string.IsNullOrEmpty(msg)) return;
+            StartupMessage = string.IsNullOrEmpty(StartupMessage) ? msg : StartupMessage + "\n" + msg;
         }
 
         static bool WaitFor(Mutex m)
@@ -172,9 +184,11 @@ namespace CAHelper
         {
             if (widgets.OfType<CaRunnerWidget>().Any(w => w.Running))
             { tray.ShowBalloonTip(5000, "Cabal Helper", "Finish or reset the CA Runner first, the update restarts the helper.", ToolTipIcon.Info); return; }
-            var r = Updater.CheckAndApply(settings.UpdateUrl, 8000, out string msg);
+            var r = Updater.CheckAndApply(settings.UpdateUrl, 8000, out string msg, out string ocrMsg);
             if (r == Updater.Result.Updated) { tray.Visible = false; Updater.Restart(); ExitThread(); return; }
-            tray.ShowBalloonTip(5000, "Cabal Helper", msg, r == Updater.Result.Failed ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            bool ocrFailed = ocrMsg != null && !ocrMsg.StartsWith("OCR package installed");
+            if (ocrMsg != null) msg += "\n" + ocrMsg + (ocrFailed ? "" : " (restart the helper to use it)");
+            tray.ShowBalloonTip(5000, "Cabal Helper", msg, r == Updater.Result.Failed || ocrFailed ? ToolTipIcon.Warning : ToolTipIcon.Info);
         }
 
         void SetLauncherVisible(bool v)

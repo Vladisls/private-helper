@@ -400,6 +400,14 @@ namespace CAHelper
         // ---------- digits ----------
         static bool White(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b)); return mn >= 165 && mx - mn < 70; }
         static bool Dark(Img img, int x, int y) { img.Rgb(x, y, out int r, out int g, out int b); return Math.Max(r, Math.Max(g, b)) < 70; }
+        /// Light, uncoloured and next to the dark outline: the anti-aliased edge of an outlined white stroke.
+        static bool StrokePx(Img img, int x, int y)
+        {
+            img.Rgb(x, y, out int r, out int g, out int b); int mn = Math.Min(r, Math.Min(g, b)), mx = Math.Max(r, Math.Max(g, b));
+            if (mn < 110 || mx - mn >= 70) return false;
+            for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) if (Dark(img, x + dx, y + dy)) return true;
+            return false;
+        }
         /// White pixel with a dark outline next to it: stack digits have one, icon glows don't.
         static bool DigitPx(Img img, int x, int y)
         {
@@ -491,36 +499,197 @@ namespace CAHelper
         /// Where the count sits in a digit band, without any font knowledge: anchored on the rightmost digit-sized
         /// glyph (counts are right-aligned and the last digit never touches the icon) and extending left by up to
         /// five digit widths, where a digit width is taken from the glyph's own height. null = no glyph at all.
-        public static Rectangle? CountRegion(Img band, double scale)
+        public static Rectangle? CountRegion(Img band, double scale) => CountRegion(CountGlyphs(band, scale), band.W, band.H);
+
+        /// CountRegion from an already found glyph chain (CountGlyphs) in a band of bandW x bandH.
+        public static Rectangle? CountRegion(IList<Rectangle> glyphs, int bandW, int bandH)
         {
-            var glyphs = CountGlyphs(band, scale);
-            if (glyphs.Count == 0) return null;
+            if (glyphs == null || glyphs.Count == 0) return null;
             var last = glyphs[glyphs.Count - 1];
             double digitW = Math.Max(6, last.Height * 0.7);
             int left = Math.Max(0, (int)Math.Round(last.Right - 5 * digitW));
-            int top = Math.Max(0, last.Y - 2), bottom = Math.Min(band.H, last.Bottom + 2);
-            return Rectangle.FromLTRB(left, top, Math.Min(band.W, last.Right + 2), bottom);
+            int top = Math.Max(0, last.Y - 2), bottom = Math.Min(bandH, last.Bottom + 2);
+            return Rectangle.FromLTRB(left, top, Math.Min(bandW, last.Right + 2), bottom);
         }
 
         /// The raw pixels of the count region of a slot (for the text reader), or null.
-        public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount)
+        public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount) => CountRegionImage(img, g, r, c, out glyphCount, out _);
+
+        /// Same, plus the count's digits alone (DigitsMask: the glyph chain's own pixels, black on white, the size of
+        /// the region). Both null when the slot has no count drawn.
+        public static Img CountRegionImage(Img img, Grid g, int r, int c, out int glyphCount, out Img digits)
         {
             var band = CropImg(img, DigitBand(g, r, c));
-            glyphCount = CountGlyphs(band, g.Scale).Count;
-            var region = CountRegion(band, g.Scale);
-            return region == null ? null : CropImg(band, region.Value);
+            var chain = CountGlyphs(band, g.Scale);
+            glyphCount = chain.Count;
+            var region = CountRegion(chain, band.W, band.H);
+            if (region == null) { digits = null; return null; }
+            digits = DigitsMask(band, chain, region.Value);
+            return CropImg(band, region.Value);
+        }
+
+        /// The count's digits and nothing else: inside `region` of the band, the pixels of the glyph chain's connected
+        /// components (outlined white pixels inside the chain's boxes, the same test CountGlyphs uses, grown into the
+        /// light anti-aliased pixels touching them) in black, all else white. Only the right-aligned chain is kept, so
+        /// no icon pixel gets in (a leading digit that touches the icon isn't in the chain either). No shapes are stored.
+        public static Img DigitsMask(Img band, IList<Rectangle> chain, Rectangle region)
+        {
+            region = Rectangle.Intersect(region, new Rectangle(0, 0, band.W, band.H));
+            if (region.Width <= 0 || region.Height <= 0) throw new ArgumentException($"digits region is empty ({region.Width}x{region.Height})");
+            var px = new byte[region.Width * region.Height * 4];
+            for (int i = 0; i < px.Length; i++) px[i] = 255;
+            double digitH = chain == null || chain.Count == 0 ? 0 : chain.Max(c => c.Height);    // the chain's own digit height
+            foreach (var b0 in chain ?? new List<Rectangle>())
+            {
+                var b = Rectangle.Intersect(b0, region);
+                if (b.Width <= 0 || b.Height <= 0) continue;
+                // seeds: the outlined white pixels CountGlyphs found; grown (8-neighbour, inside the glyph's box) into
+                // the bright uncoloured pixels next to them, i.e. the anti-aliased parts of the same stroke
+                var keep = new bool[b.Width * b.Height]; var st = new Stack<(int, int)>();
+                for (int y = b.Top; y < b.Bottom; y++) for (int x = b.Left; x < b.Right; x++)
+                    if (DigitPx(band, x, y)) { keep[(y - b.Y) * b.Width + x - b.X] = true; st.Push((x, y)); }
+                while (st.Count > 0)
+                {
+                    var (x0, y0) = st.Pop();
+                    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int x = x0 + dx, y = y0 + dy;
+                        if (x < b.Left || y < b.Top || x >= b.Right || y >= b.Bottom || keep[(y - b.Y) * b.Width + x - b.X] || !StrokePx(band, x, y)) continue;
+                        keep[(y - b.Y) * b.Width + x - b.X] = true; st.Push((x, y));
+                    }
+                }
+                // pieces much shorter than the chain's digits are specks (icon shine merged into the box), not strokes
+                var lab = new int[keep.Length]; int n = 0;
+                for (int i0 = 0; i0 < keep.Length; i0++)
+                {
+                    if (!keep[i0] || lab[i0] != 0) continue;
+                    n++; var piece = new List<int> { i0 }; lab[i0] = n; int top = i0 / b.Width, bottom = top;
+                    for (int k = 0; k < piece.Count; k++)
+                    {
+                        int px0 = piece[k] % b.Width, py0 = piece[k] / b.Width;
+                        top = Math.Min(top, py0); bottom = Math.Max(bottom, py0);
+                        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int x = px0 + dx, y = py0 + dy, j = y * b.Width + x;
+                            if (x < 0 || y < 0 || x >= b.Width || y >= b.Height || !keep[j] || lab[j] != 0) continue;
+                            lab[j] = n; piece.Add(j);
+                        }
+                    }
+                    if (bottom - top + 1 < digitH * 0.4) continue;
+                    foreach (int j in piece)
+                    {
+                        int o = ((b.Y + j / b.Width - region.Y) * region.Width + (b.X + j % b.Width - region.X)) * 4;
+                        px[o] = px[o + 1] = px[o + 2] = 0;
+                    }
+                }
+            }
+            return new Img(region.Width, region.Height, px);
+        }
+
+        /// Tesseract input B ("digits-isolated 3x"): a DigitsMask enlarged `f` times by pixel repetition (it stays pure
+        /// black and white, nothing is joined or split), with a white margin of 10 px * f.
+        public static Img DigitsIsolatedPicture(Img mask, int f = 3)
+        {
+            if (mask == null || mask.W <= 0 || mask.H <= 0) throw new ArgumentException($"digits picture is empty ({mask?.W ?? 0}x{mask?.H ?? 0})");
+            if (f < 1) throw new ArgumentException("enlarge factor must be at least 1 (got " + f + ")");
+            int pad = 10 * f, W = mask.W * f + 2 * pad, H = mask.H * f + 2 * pad;
+            var px = new byte[W * H * 4];
+            for (int i = 0; i < px.Length; i++) px[i] = 255;
+            for (int y = 0; y < mask.H * f; y++)
+                for (int x = 0; x < mask.W * f; x++)
+                {
+                    int si = ((y / f) * mask.W + x / f) * 4, di = ((pad + y) * W + pad + x) * 4;
+                    px[di] = mask.Px[si]; px[di + 1] = mask.Px[si + 1]; px[di + 2] = mask.Px[si + 2];
+                }
+            return new Img(W, H, px);
+        }
+
+        /// Tesseract input A ("raw 3x"): the raw region enlarged 3x with a dark margin (the first Windows treatment).
+        public static Img RawCountPicture(Img region)
+        {
+            if (region == null || region.W <= 0 || region.H <= 0) throw new ArgumentException($"count region is empty ({region?.W ?? 0}x{region?.H ?? 0})");
+            return Compose(CountVariantNames[0], Enlarge(region, 3), 3, 0, region.H, 30, null, null, null).Item2;
+        }
+
+        /// The names of the two Tesseract inputs (diagnostics, and the OCR test sheet's last two columns). The count
+        /// read tries the digits-isolated picture first, then the raw one.
+        public const string TessDigitsName = "tesseract digits-isolated 3x", TessRawName = "tesseract raw 3x";
+
+        /// Tesseract's mean confidence (0..1) below this counts as "not read".
+        public const float TessMinConfidence = 0.40f;
+
+        /// The count in a Tesseract result (digits-only mode): the trailing run of 1-5 digits, or null when the
+        /// confidence is below TessMinConfidence. On the digits-isolated picture every mark is a count glyph, so
+        /// spaces Tesseract puts between digits are dropped first; on the raw picture the icon can leave marks on the
+        /// left, so only the trailing run counts.
+        public static int? TesseractCount(string text, float confidence, bool isolated)
+        {
+            var d = TesseractDigits(text, confidence, isolated);
+            return d == null ? (int?)null : int.Parse(d, CultureInfo.InvariantCulture);
+        }
+
+        /// TesseractCount as the digit string (leading zeros kept, so "08" can be told from "8").
+        public static string TesseractDigits(string text, float confidence, bool isolated)
+        {
+            if (text == null || confidence < TessMinConfidence) return null;
+            if (isolated) text = new string(text.Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+            return TrailingDigits(text);
+        }
+
+        /// Source labels of DecideTesseract (digits picture, diagnostics log).
+        public const string TessAgree = "tesseract A+B agree", TessALonger = "tesseract A (longer)", TessB = "tesseract B",
+                            TessA = "tesseract A", TessDisagree = "tesseract disagree";
+
+        /// The count from both Tesseract reads of a slot: A = raw 3x, B = digits-isolated 3x (text + mean confidence;
+        /// null text = not read / no picture). A read counts with >= 40% confidence and 1-5 digits.
+        ///  only one reads          -> that one
+        ///  both, equal             -> it ("agree")
+        ///  both, A ends with B and is longer -> A (B lost a leading digit that touched the icon)
+        ///  both, otherwise         -> B (icon-free), "disagree", not confident; A instead when only A passes the
+        ///                             chain check (AcceptIsolatedCount: as many digits as glyphs, no leading zero)
+        /// The chain check is only a tie-break / confidence signal: chain glyph counts are not reliable enough to reject.
+        /// confident = false tells the smoother not to take the count at once.
+        public static (int? count, string source, bool confident) DecideTesseract(string textA, float confA, string textB, float confB, int glyphCount)
+        {
+            string a = TesseractDigits(textA, confA, false), b = TesseractDigits(textB, confB, true);
+            int? N(string d) => d == null ? (int?)null : int.Parse(d, CultureInfo.InvariantCulture);
+            bool bChain(string d) => AcceptIsolatedCount(d, glyphCount);
+            if (a == null && b == null) return (null, "none", false);
+            if (a == null) return (N(b), TessB, bChain(b));
+            if (b == null) return (N(a), TessA, true);
+            if (N(a) == N(b)) return (N(a), TessAgree, true);
+            if (a.Length > b.Length && a.EndsWith(b, StringComparison.Ordinal)) return (N(a), TessALonger, true);
+            // real disagreement: B unless only A is consistent with the glyph chain
+            bool aChain = a.Length == glyphCount && (a.Length == 1 || a[0] != '0');
+            return !bChain(b) && aChain ? (N(a), TessDisagree, false) : (N(b), TessDisagree, false);
+        }
+
+        /// A digits-only read is trusted only if it matches the glyph chain it was drawn from: as many digits as chain
+        /// glyphs and no leading zero (counts have none). A leading digit that touches the icon is not in the chain,
+        /// so "208" can come out as "08": that read is refused and the raw picture is tried instead.
+        public static bool AcceptIsolatedCount(string text, int glyphCount)
+        {
+            var d = new string((text ?? "").Where(char.IsDigit).ToArray());
+            return d.Length > 0 && d.Length == glyphCount && (d.Length == 1 || d[0] != '0');
         }
 
         /// The count in a text-reader result for one region: the trailing run of digits (counts are right-aligned,
         /// so anything the reader made of icon remains sits on the left). l/I/| count as 1, O/o as 0.
         public static int? TrailingCount(string text)
         {
+            var d = TrailingDigits(text);
+            return d == null ? (int?)null : int.Parse(d, CultureInfo.InvariantCulture);
+        }
+
+        /// TrailingCount as the digit string itself (leading zeros kept), or null when there are none or more than 5.
+        public static string TrailingDigits(string text)
+        {
             if (text == null) return null;
             var fixedUp = new string(text.Select(ch => ch == 'l' || ch == 'I' || ch == '|' ? '1' : ch == 'O' || ch == 'o' ? '0' : ch).ToArray());
             int end = fixedUp.Length; while (end > 0 && !char.IsDigit(fixedUp[end - 1])) end--;
             int start = end; while (start > 0 && char.IsDigit(fixedUp[start - 1])) start--;
             if (end == start || end - start > 5) return null;
-            return int.Parse(fixedUp.Substring(start, end - start), CultureInfo.InvariantCulture);
+            return fixedUp.Substring(start, end - start);
         }
 
         public static Img CropImg(Img im, Rectangle r)

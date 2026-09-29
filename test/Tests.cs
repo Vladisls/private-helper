@@ -4,6 +4,14 @@ static class T {
   static void Check(bool ok, string name){ Console.WriteLine((ok?"PASS ":"FAIL ")+name); if(!ok) fail++; }
   static TimeSpan S(double s)=>TimeSpan.FromSeconds(s);
   static bool FarrmSafe() => FarmCheck.TrailingCount("")==null && FarmCheck.TrailingCount("2 34")==34;
+  /// Black 8-connected components of a picture, and the same merged where they overlap in x (CountGlyphs' glyphs).
+  static (int comps, int glyphs) BlackComponents(Img p){ var seen = new bool[p.W * p.H]; var st = new Stack<int>(); var spans = new List<(int l, int r)>();
+    for (int i = 0; i < seen.Length; i++) { if (seen[i] || p.Px[i*4] != 0) continue; int l = i % p.W, r = l; seen[i] = true; st.Push(i);
+      while (st.Count > 0) { int k = st.Pop(), x = k % p.W, y = k / p.W; l = Math.Min(l, x); r = Math.Max(r, x);
+        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) { int nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= p.W || ny >= p.H) continue; int j = ny * p.W + nx; if (!seen[j] && p.Px[j*4] == 0) { seen[j] = true; st.Push(j); } } }
+      spans.Add((l, r)); }
+    int glyphs = 0, right = -1; foreach (var sp in spans.OrderBy(q => q.l)) { if (sp.l > right) glyphs++; right = Math.Max(right, sp.r); }
+    return (spans.Count, glyphs); }
   static int Main(){
     var p = new List<string>();
     var s = Settings.Parse("", p);
@@ -411,6 +419,32 @@ static class T {
         Console.WriteLine("VARIANTS: " + string.Join(" | ", infoV));
         Check(regionsSeen == 20 && okV == regionsSeen, $"5 OCR treatments per real count region: non-empty, larger than the region, white-isolated 0-30% black ({okV}/{regionsSeen})");
       }
+      // Tesseract input B: only the count's glyph-chain pixels, black on white, 3x, white margin
+      {
+        int seenD = 0, okD = 0; var infoD = new List<string>();
+        foreach (var (nmD, imD, boxD) in new[]{ ("inv", inv, (1912,248,612,612)), ("mis", Load(fmis), (815,160,620,620)) }) {
+          var grD = FarmCheck.BestRead(imD, FarmCheck.FindGrid(imD, boxD.Item1, boxD.Item2, boxD.Item3, boxD.Item4), FarmCheck.DefaultIcons());
+          foreach (var sl in grD.slots.OrderBy(x => x.Row * 8 + x.Col)) {
+            var reg = FarmCheck.CountRegionImage(imD, grD.grid, sl.Row, sl.Col, out int nG, out Img mask);
+            if (reg == null) continue;
+            seenD++;
+            var pic = FarmCheck.DigitsIsolatedPicture(mask);
+            int black = 0; bool binary = true;
+            for (int q = 0; q < pic.W * pic.H; q++) { int v = pic.Px[q*4]; if (v == 0) black++; else if (v != 255) binary = false; }
+            double frac = pic.W * pic.H > 0 ? (double)black / (pic.W * pic.H) : 0;
+            var (comps, glyphsX) = BlackComponents(pic);
+            // inv.bin is a clean capture: one 8-connected component per glyph. mis.bin has a dotted line drawn across
+            // the digits, which cuts strokes into pieces stacked above each other; counted as CountGlyphs counts glyphs
+            // (pieces overlapping in x are one glyph) they still match.
+            bool ok = pic.W == mask.W * 3 + 60 && pic.H == mask.H * 3 + 60 && mask.W == reg.W && mask.H == reg.H && binary && black > 0 && frac < 0.30
+                      && glyphsX == nG && (nmD != "inv" || comps == nG);
+            if (ok) okD++;
+            infoD.Add($"{nmD} {sl.Item.Replace("Upgrade Core","UC").Replace("Force Core","FC")} {pic.W}x{pic.H} black {frac:P0} comps {comps} glyphs {glyphsX}/{nG}");
+          }
+        }
+        Console.WriteLine("DIGITS-ISOLATED: " + string.Join(" | ", infoD));
+        Check(seenD == 20 && okD == seenD, $"digits-isolated picture per real count region: pure black/white, 0-30% black, one black component per chain glyph ({okD}/{seenD})");
+      }
       var foff = System.IO.Path.Combine(dataDir, "off.bin");
       if (System.IO.File.Exists(foff)) {
         var ofi = Load(foff);   // 1146x1018 screenshot; inventory grid slots start ~x505,y150, pitch ~76.9; blue area box ~487,143 658x642
@@ -493,6 +527,27 @@ static class T {
           && FarmCheck.CountFromWords(new[]{ new OcrWord("7", 10, 35, 20, 40), new OcrWord("226", 105, 35, 50, 40) }, numBox) == 226, "treatment words: printed words and words off the count are dropped");
     var flat = new Img(3, 2, Enumerable.Range(0, 24).Select(q => (byte)(q % 4 == 3 ? 255 : 90)).ToArray()); var flat3 = FarmCheck.Enlarge(flat, 3);
     Check(flat3.W == 9 && flat3.H == 6 && flat3.Px.All(b => b == 90 || b == 255), "bicubic enlarge keeps a flat picture flat");
+    Check(FarmCheck.TesseractCount("209\n", 0.91f, true) == 209 && FarmCheck.TesseractCount("2 09\n", 0.8f, true) == 209 && FarmCheck.TesseractCount("12 34\n", 0.8f, false) == 34
+          && FarmCheck.TesseractCount("209", 0.39f, true) == null && FarmCheck.TesseractCount("", 0.95f, true) == null && FarmCheck.TesseractCount("123456", 0.95f, true) == null && FarmCheck.TesseractCount(null, 1f, false) == null,
+          "Tesseract result: trailing 1-5 digits, spaces dropped on the digits-only picture, under 40% confidence is not read");
+    Check(FarmCheck.AcceptIsolatedCount("208", 3) && !FarmCheck.AcceptIsolatedCount("08", 2) && !FarmCheck.AcceptIsolatedCount("44", 3) && FarmCheck.AcceptIsolatedCount("0", 1) && FarmCheck.AcceptIsolatedCount("2 08", 3),
+          "digits-only read must match the glyph chain: same number of digits, no leading zero");
+    {
+      var onlyA = FarmCheck.DecideTesseract("208", 0.9f, null, 0f, 2); var onlyA2 = FarmCheck.DecideTesseract("208", 0.9f, "08", 0.3f, 2);
+      var onlyB = FarmCheck.DecideTesseract("", 0.1f, "14", 0.8f, 2); var onlyBOff = FarmCheck.DecideTesseract(null, 0f, "08", 0.8f, 2);
+      var same = FarmCheck.DecideTesseract("144", 0.7f, "1 44", 0.9f, 3);
+      var longer = FarmCheck.DecideTesseract("208", 0.8f, "08", 0.9f, 2); var longer2 = FarmCheck.DecideTesseract("223", 0.6f, "23", 0.95f, 2);
+      var dis = FarmCheck.DecideTesseract("51", 0.7f, "34", 0.9f, 2); var disA = FarmCheck.DecideTesseract("34", 0.7f, "7", 0.9f, 2);
+      var none = FarmCheck.DecideTesseract("", 0f, "9", 0.2f, 1);
+      Check(onlyA == (208, FarmCheck.TessA, true) && onlyA2 == (208, FarmCheck.TessA, true), $"A+B decision: only A reads (B missing or under 40%) -> A ({onlyA}, {onlyA2})");
+      Check(onlyB == (14, FarmCheck.TessB, true) && onlyBOff == (8, FarmCheck.TessB, false), $"A+B decision: only B reads -> B, not confident when it doesn't match the chain ({onlyB}, {onlyBOff})");
+      Check(same == (144, FarmCheck.TessAgree, true), $"A+B decision: equal -> agree ({same})");
+      Check(longer == (208, FarmCheck.TessALonger, true) && longer2 == (223, FarmCheck.TessALonger, true), $"A+B decision: A ends with B and is longer -> A ({longer}, {longer2})");
+      Check(dis == (34, FarmCheck.TessDisagree, false) && disA == (34, FarmCheck.TessDisagree, false), $"A+B decision: disagree -> B, or A when only A matches the chain; never confident ({dis}, {disA})");
+      Check(none == (null, "none", false), $"A+B decision: nothing read ({none})");
+    }
+    var rawPic = FarmCheck.RawCountPicture(new Img(4, 3, Enumerable.Repeat((byte)200, 48).ToArray()));
+    Check(rawPic.W == 4 * 3 + 60 && rawPic.H == 3 * 3 + 60 && rawPic.Px[0] == 30, "raw 3x picture for Tesseract: region 3x with a dark margin");
     bool threw = false; try { FarmCheck.MakeCountVariants(new Img(0, 0, new byte[0])); } catch (ArgumentException) { threw = true; }
     Check(threw, "an empty count region is refused with a clear error");
     var endLines = new List<string>{ "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "You successfully stopped the locomotive.", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325" };
@@ -510,6 +565,37 @@ static class T {
     string sha = new string('a', 64);
     Check(Updater.TryParseInfo("2.1.0\r\n"+sha+"\r\n", out var v1, out var h1) && v1==new Version(2,1,0) && h1==sha, "version.txt parses (CRLF ok)");
     Check(!Updater.TryParseInfo("2.1.0", out _, out _) && !Updater.TryParseInfo("abc\n"+sha, out _, out _) && !Updater.TryParseInfo("2.1.0\nshort", out _, out _), "bad version.txt is rejected");
+    string osha = new string('b', 32) + "0123456789abcdefABCDEF0123456789";
+    Check(Updater.TryParseInfo("2.1.0\n"+sha+"\n"+osha+"\n", out var v3, out var h3, out var o3) && v3==new Version(2,1,0) && h3==sha && o3==osha
+          && Updater.TryParseInfo("2.1.0\n"+sha, out _, out _, out var oc2) && oc2==null && Updater.TryParseInfo("2.1.0\n"+sha+"\n"+osha, out _, out _), "version.txt with 2 or 3 lines parses (3rd line: OCR package SHA-256)");
+    Check(!Updater.TryParseInfo("2.1.0\n"+sha+"\nshort", out _, out _, out _) && !Updater.TryParseInfo("2.1.0\n"+sha+"\n"+new string('g', 64), out _, out _, out _)
+          && !Updater.TryParseInfo("2.1.0\n"+new string('z', 64), out _, out _), "a 3rd line that isn't 64 hex characters (or a bad exe SHA) is rejected");
+    Check(Updater.OcrPackageNeeded(osha, null) && Updater.OcrPackageNeeded(osha, new string('c', 64)) && !Updater.OcrPackageNeeded(osha, osha.ToUpperInvariant() + "\r\n") && !Updater.OcrPackageNeeded(null, null),
+          "OCR package: fetched when ocr.sha is missing or differs, not when it matches or version.txt has no 3rd line");
+    {
+      byte[] Zip(params (string name, byte[] data)[] entries) { using (var ms = new System.IO.MemoryStream()) { using (var za = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Create, true)) foreach (var (n, d) in entries) using (var es = za.CreateEntry(n).Open()) es.Write(d, 0, d.Length); return ms.ToArray(); } }
+      var good = Zip(("tessdata/eng.traineddata", new byte[] { 1, 2, 3 }), ("x64/tesseract50.dll", new byte[] { 4 }), ("Tesseract.dll", new byte[] { 5 }));
+      string goodSha = Updater.Sha256(good);
+      Check(Updater.ValidateOcrZip(good, goodSha, out string e1) && e1 == null, "OCR package zip with the right SHA-256 and eng.traineddata is accepted");
+      Check(!Updater.ValidateOcrZip(good, new string('0', 64), out string e2) && e2.Contains("SHA-256"), "OCR package zip with another SHA-256 is refused (" + e2 + ")");
+      var noData = Zip(("x64/tesseract50.dll", new byte[] { 4 }));
+      Check(!Updater.ValidateOcrZip(noData, Updater.Sha256(noData), out string e3) && e3.Contains("eng.traineddata"), "OCR package zip without tessdata/eng.traineddata is refused (" + e3 + ")");
+      var slip = Zip(("tessdata/eng.traineddata", new byte[] { 1 }), ("../evil.dll", new byte[] { 6 }));
+      Check(!Updater.ValidateOcrZip(slip, Updater.Sha256(slip), out string e4) && e4.Contains("outside"), "OCR package zip with a path outside ocr/ is refused (" + e4 + ")");
+      Check(!Updater.ValidateOcrZip(new byte[] { 1, 2, 3 }, Updater.Sha256(new byte[] { 1, 2, 3 }), out string e5) && e5 != null, "a broken OCR package zip is refused (" + e5 + ")");
+      string tmpDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cah-ocr-test-" + Guid.NewGuid().ToString("N"));
+      try {
+        System.IO.Directory.CreateDirectory(System.IO.Path.Combine(tmpDir, "ocr", "x64"));
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(tmpDir, "ocr", "x64", "tesseract50.dll"), new byte[] { 4 });   // same bytes: left alone
+        string ocrDir = System.IO.Path.Combine(tmpDir, "ocr");
+        int written = Updater.InstallOcrPackage(good, goodSha, ocrDir);
+        Check(written == 2 && System.IO.File.ReadAllBytes(System.IO.Path.Combine(ocrDir, "tessdata", "eng.traineddata")).SequenceEqual(new byte[] { 1, 2, 3 })
+              && System.IO.File.Exists(System.IO.Path.Combine(ocrDir, "Tesseract.dll")) && System.IO.File.ReadAllText(System.IO.Path.Combine(ocrDir, "ocr.sha")).Trim() == goodSha
+              && !Updater.OcrPackageNeeded(goodSha, Updater.ReadLocalOcrSha(ocrDir)), "OCR package installs into ocr/ (unchanged files skipped), then ocr.sha matches");
+        bool refused = false; try { Updater.InstallOcrPackage(good, new string('0', 64), ocrDir); } catch (System.IO.InvalidDataException) { refused = true; }
+        Check(refused && Updater.ReadLocalOcrSha(ocrDir) == goodSha, "a mismatching OCR package is never extracted");
+      } finally { try { System.IO.Directory.Delete(tmpDir, true); } catch { } }
+    }
     Check(new Version(2,1,0) > new Version(2,0,9) && !(new Version(2,1,0) > new Version(2,1,0)), "only newer versions update");
     Check(Updater.Short(new Version(2,1,3,0))=="2.1.3", "version shown as 2.1.3");
     Console.WriteLine(fail==0?"ALL PASS":fail+" FAILED"); return fail;

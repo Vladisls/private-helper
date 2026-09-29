@@ -42,6 +42,15 @@ namespace CAHelper
             try { File.WriteAllLines(DebugPath, debug); } catch { }
         }
 
+        /// Logs which reader the counts use (Tesseract, or Windows' reader and why Tesseract isn't there) once, and again
+        /// only if it changes.
+        string countEngineLogged;
+        void LogCountEngine()
+        {
+            string st = PartyOcr.CountEngineStatus;
+            if (st != countEngineLogged) { countEngineLogged = st; Debug("count reader: " + st); }
+        }
+
         // Slot size: nothing is guessed from the screen resolution (the game can run at another size than the
         // desktop, or on another monitor). slotSize is saved once a read has recognised cores; foundPitch comes
         // from the last on-screen search. Unknown = 0 = FindGrid tries every slot size.
@@ -289,7 +298,7 @@ namespace CAHelper
         /// Screenshot of the screen with the debug drawings painted on it (the helper's own windows are invisible to
         /// screen captures, so the snipping tool can't show them). Saved as cabal-helper-farm-view-N.png (last 5),
         /// with the last count read (-digits.png) and an OCR input experiment (-ocr-test.png): every count region
-        /// of the open inventory in all 5 treatments, each read by the text reader. Each file is saved on its own.
+        /// of the open inventory in Windows' 5 treatments and Tesseract's 2 inputs. Each file is saved on its own.
         int viewSaves; bool savingView;
         async void SaveView()
         {
@@ -317,7 +326,7 @@ namespace CAHelper
                 try { if (PartyOcr.SaveLastStrip(digitsPath)) saved.Add(digitsPath); }
                 catch (Exception ex) { Fail("digits picture", ex); }
                 // OCR input experiment on the inventory as it is now
-                List<(string label, Img region)> regions = null;
+                List<(string label, Img region, Img digits, int glyphs)> regions = null;
                 try { regions = CaptureCountRegions(out string why); if (regions == null) Debug("OCR test sheet skipped: " + why); }
                 catch (Exception ex) { Fail("OCR test capture", ex); }
                 if (regions != null)
@@ -369,7 +378,7 @@ namespace CAHelper
 
         /// The count region of every recognised core slot in the inventory as it is now, found the same way as the
         /// preview read (Probe): pinned grid when the anchor works, else the best read. null (+ why) = no inventory.
-        List<(string label, Img region)> CaptureCountRegions(out string why)
+        List<(string label, Img region, Img digits, int glyphs)> CaptureCountRegions(out string why)
         {
             var cap = InvCapture;
             if (cap.Width <= 0 || cap.Height <= 0) { why = $"inventory area is off screen ({cap.Width}x{cap.Height})"; return null; }
@@ -382,11 +391,12 @@ namespace CAHelper
             var anch = FarmCheck.AnchorByButtons(img, g, out FarmCheck.AnchorResult res);
             var (g2, slots) = res.Ok ? (anch, FarmCheck.ReadInventory(img, anch, icons, 8, 8, new Dictionary<(int, int), string>(slotIdentity))) : FarmCheck.BestRead(img, g, icons);
             if (slots.Count == 0) { why = "no core slots recognised"; return null; }
-            var list = new List<(string, Img)>();
+            var list = new List<(string, Img, Img, int)>();
             foreach (var sl in slots.OrderBy(x => x.Row * 8 + x.Col))
             {
-                var region = FarmCheck.CountRegionImage(img, g2, sl.Row, sl.Col, out int n);
-                list.Add(($"{Short(sl.Item)} ({n} glyphs)", region == null || region.W <= 0 || region.H <= 0 ? null : region));
+                var region = FarmCheck.CountRegionImage(img, g2, sl.Row, sl.Col, out int n, out Img digits);
+                bool none = region == null || region.W <= 0 || region.H <= 0;
+                list.Add(($"{Short(sl.Item)} ({n} glyphs)", none ? null : region, none ? null : digits, n));
             }
             why = null;
             return list;
@@ -482,9 +492,10 @@ namespace CAHelper
                             {
                                 try
                                 {
-                                    var imgP = PartyOcr.ToImg(copyP); var stripsP = new List<Img>(); var glyphsP = new List<int>();
-                                    foreach (var sl in slotsP) { stripsP.Add(FarmCheck.CountRegionImage(imgP, gridP, sl.Row, sl.Col, out int n)); glyphsP.Add(n); }
-                                    var ocrP = await PartyOcr.ReadCountStripsAsync(stripsP, glyphsP, slotsP.Select(x => Short(x.Item)).ToList());
+                                    var imgP = PartyOcr.ToImg(copyP); var stripsP = new List<Img>(); var glyphsP = new List<int>(); var digitsP = new List<Img>();
+                                    foreach (var sl in slotsP) { stripsP.Add(FarmCheck.CountRegionImage(imgP, gridP, sl.Row, sl.Col, out int n, out Img dg)); glyphsP.Add(n); digitsP.Add(dg); }
+                                    var ocrP = await PartyOcr.ReadCountStripsAsync(stripsP, glyphsP, slotsP.Select(x => Short(x.Item)).ToList(), digitsP);
+                                    LogCountEngine();
                                     for (int i = 0; i < slotsP.Count; i++) slotsP[i].Count = ocrP[i] ?? (glyphsP[i] == 0 ? 1 : (int?)null);
                                     if (!running) { ovSlots = slotsP; DrawOverlay(); }
                                 }
@@ -679,23 +690,29 @@ namespace CAHelper
                     {
                         // Generic count reading: the raw pixels of each slot's count region (found by glyph size and
                         // position only, no font shapes) go to the text reader; the count is the trailing run of digits.
-                        var imgNow = PartyOcr.ToImg(copy); var strips = new List<Img>(); var glyphCounts = new List<int>();
-                        foreach (var sl in slotsNow) { strips.Add(FarmCheck.CountRegionImage(imgNow, gridNow, sl.Row, sl.Col, out int n)); glyphCounts.Add(n); }
-                        ocr = await PartyOcr.ReadCountStripsAsync(strips, glyphCounts, slotsNow.Select(x => Short(x.Item)).ToList());
+                        // Tesseract (OCR package) reads the digits-isolated picture first, then the raw one; without the
+                        // package, Windows' text reader reads the raw region in its treatments.
+                        var imgNow = PartyOcr.ToImg(copy); var strips = new List<Img>(); var glyphCounts = new List<int>(); var digits = new List<Img>();
+                        foreach (var sl in slotsNow) { strips.Add(FarmCheck.CountRegionImage(imgNow, gridNow, sl.Row, sl.Col, out int n, out Img dg)); glyphCounts.Add(n); digits.Add(dg); }
+                        ocr = await PartyOcr.ReadCountStripsAsync(strips, glyphCounts, slotsNow.Select(x => Short(x.Item)).ToList(), digits);
+                        LogCountEngine();
                     }
                     catch (Exception ex) { Debug("text reader failed on the counts: " + ex.Message, "ocrfail"); }
                     finally { copy.Dispose(); }
                     try
                     {
                         var byReader = new HashSet<SlotRead>();
+                        var sure = PartyOcr.LastCountConfident();                         // false: Tesseract's A and B disagreed
+                        var unsure = new HashSet<SlotRead>();
                         for (int i = 0; i < slotsNow.Count; i++)
                         {
                             int? o = ocr != null && i < ocr.Length ? ocr[i] : null;
-                            if (o.HasValue) { slotsNow[i].Count = o; byReader.Add(slotsNow[i]); }
+                            if (o.HasValue) { slotsNow[i].Count = o; byReader.Add(slotsNow[i]); if (i < sure.Length && !sure[i]) unsure.Add(slotsNow[i]); }
                             else if (slotsNow[i].GlyphCount == 0) slotsNow[i].Count = 1;          // no count drawn: a single item
                         }
                         var unread = slotsNow.Where(x => !x.Count.HasValue).Select(x => Short(x.Item)).ToList();
-                        if (ocr != null) Debug($"counts by text reader: {byReader.Count}/{slotsNow.Count} read" + (unread.Count > 0 ? "; unreadable: " + string.Join(", ", unread) : ""), "ocr:" + byReader.Count + string.Join("", unread));
+                        if (ocr != null) Debug($"counts by text reader: {byReader.Count}/{slotsNow.Count} read ({PartyOcr.LastCountSourceSummary()})" + (unread.Count > 0 ? "; unreadable: " + string.Join(", ", unread) : ""), "ocr:" + byReader.Count + string.Join("", unread));
+                        foreach (var dis in PartyOcr.LastCountDisagreements()) Debug("tesseract disagree (not confident): " + dis, "dis:" + dis);
                         // Keep the strips of reads where a count changed since the last read (last 5).
                         bool changed = false;
                         foreach (var sl in slotsNow)
@@ -716,7 +733,8 @@ namespace CAHelper
                             counts[sl.Item] = counts.TryGetValue(sl.Item, out int c) ? c + sl.Count.Value : sl.Count.Value;
                         }
                         // confident = every stack of the core was read by the text reader this time: shown at once
-                        var confident = new HashSet<string>(counts.Keys.Where(name => slotsNow.Where(x => x.Item == name).All(byReader.Contains)));
+                        // (a count Tesseract's two pictures disagreed on is not confident: it goes through the majority)
+                        var confident = new HashSet<string>(counts.Keys.Where(name => slotsNow.Where(x => x.Item == name).All(x => byReader.Contains(x) && !unsure.Contains(x))));
                         if (unread.Count > 0) Warn("Some counts unreadable by the text reader: see Areas & learning > Diagnostics: last count strip");
                         smoother.Add(counts, confident); readsSinceStart++;
                         ApplyRead(smoother.Stable(), smoother.Gone());

@@ -1,0 +1,72 @@
+Cabal Helper OCR package: third-party notices
+=============================================
+
+The files in this folder (ocr\ next to CabalHelper.exe) are not written by Cabal Helper. They are used, unchanged,
+to read the Farm Tracker's stack counts in digits-only mode. Each keeps its own licence:
+
+Tesseract.dll                     Tesseract .NET wrapper 5.2.0, Copyright 2012-2020 Charles Weld
+                                  Apache License 2.0 - https://github.com/charlesw/tesseract
+                                  (includes InteropDotNet, Copyright (c) 2014 Andrey Akinshin, MIT License)
+x64\tesseract50.dll               Tesseract OCR 5.0.0, Copyright the Tesseract OCR authors (Google and contributors)
+x86\tesseract50.dll               Apache License 2.0 - https://github.com/tesseract-ocr/tesseract
+x64\leptonica-1.82.0.dll          Leptonica 1.82.0, Copyright (C) 2001-2022 Leptonica (Dan Bloomberg)
+x86\leptonica-1.82.0.dll          BSD 2-Clause License (text below) - http://www.leptonica.org
+                                  Statically linked into it: zlib 1.2.13 (zlib License, Jean-loup Gailly and
+                                  Mark Adler), libpng 1.6.37 (libpng License), libjpeg-turbo 2.1.4 (IJG License and
+                                  BSD 3-Clause, "This software is based in part on the work of the Independent
+                                  JPEG Group"), libtiff 4.4.0 (libtiff License, Sam Leffler and Silicon Graphics)
+tessdata\eng.traineddata          English "fast" LSTM model from https://github.com/tesseract-ocr/tessdata_fast
+                                  Apache License 2.0
+
+The native DLLs come from the Tesseract 5.2.0 NuGet package and need the Microsoft Visual C++ 2015-2022
+Redistributable (x64 or x86), which most Windows PCs with games already have.
+
+
+Apache License 2.0 (Tesseract, the .NET wrapper, tessdata_fast)
+---------------------------------------------------------------
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in compliance
+with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+
+Leptonica licence (BSD 2-Clause)
+--------------------------------
+Copyright (C) 2001-2022 Leptonica.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
+following conditions are met:
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following
+   disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
+   following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL ANY COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+InteropDotNet licence (MIT)
+---------------------------
+Copyright (c) 2014 Andrey Akinshin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice
+and this permission notice shall be included in all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
+
+zlib, libpng, libjpeg-turbo and libtiff are used under their permissive licences:
+zlib License https://zlib.net/zlib_license.html, libpng License http://www.libpng.org/pub/png/src/libpng-LICENSE.txt,
+libjpeg-turbo https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/LICENSE.md,
+libtiff https://gitlab.com/libtiff/libtiff/-/blob/master/LICENSE.md

@@ -5,3 +5,4 @@ dist/
 *.user
 .DS_Store
 test/data/
+!release/ocr.zip
