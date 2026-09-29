@@ -233,69 +233,93 @@ namespace CAHelper
             finally { bmp.UnlockBits(d); }
         }
 
-        public const int DigitEnlarge = 3, DigitGap = 6;
-        /// What the last count read looked like (for diagnostics): the strip the reader received, the words it
-        /// returned, the slot names per band and the counts that came out.
-        public static Bitmap LastStrip; public static List<OcrWord> LastWords = new List<OcrWord>();
-        public static List<string> LastStripNames = new List<string>(); public static int?[] LastMapped = new int?[0];
-        public static int LastBandH;
+        /// Windows' text reader is built for lines of text: a lone digit, a very short string or a big glyph with no
+        /// margin often returns nothing. So each count region is read on its own picture, padded, with a printed
+        /// prefix in front ("Qty ") so it reads a line; the count is the trailing run of digits, so the prefix never
+        /// interferes. Several variants are tried per region until one reads. glyphCounts and names are for diagnostics.
+        public static readonly (string name, int enlarge, bool prefix)[] Variants = { ("prefix 2x", 2, true), ("plain 3x", 3, false), ("prefix 3x", 3, true), ("plain 2x", 2, false), ("prefix 4x", 4, true) };
 
-        /// Saves the last strip for diagnostics: left the strip as the reader got it, right the same with the reader's
-        /// words boxed, and per band the slot name and the count taken from the words.
+        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> glyphCounts, IList<string> names = null)
+        {
+            var result = new int?[strips.Count];
+            var diag = new List<(string name, Bitmap pic, List<OcrWord> words, int? got, string variant)>();
+            for (int i = 0; i < strips.Count; i++)
+            {
+                if (strips[i] == null) continue;
+                string label = names != null && i < names.Count ? names[i] + $" ({glyphCounts[i]} glyphs)" : $"band {i}";
+                Bitmap keep = null; List<OcrWord> keepWords = null; string keepVariant = "none";
+                foreach (var v in Variants)
+                {
+                    var pic = MakeCountPicture(strips[i], v.enlarge, v.prefix);
+                    List<OcrWord> words;
+                    try { var lines = await ReadWordsAsync(pic, 1); words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l); }
+                    catch { pic.Dispose(); throw; }
+                    var text = string.Join("", words.OrderBy(w => w.X).Select(w => w.Text));
+                    var got = FarmCheck.TrailingCount(text);
+                    if (keep == null) { keep = pic; keepWords = words; keepVariant = v.name; } else if (got.HasValue) { keep.Dispose(); keep = pic; keepWords = words; keepVariant = v.name; } else pic.Dispose();
+                    if (got.HasValue) { result[i] = got; break; }
+                }
+                diag.Add((label, keep, keepWords ?? new List<OcrWord>(), result[i], result[i].HasValue ? keepVariant : "none of " + Variants.Length));
+            }
+            lock (DiagLock) { foreach (var d in LastDiag) d.pic?.Dispose(); LastDiag = diag; }
+            return result;
+        }
+
+        /// One count on its own picture: dark margin, optional printed prefix, the region enlarged.
+        static Bitmap MakeCountPicture(Img region, int enlarge, bool prefix)
+        {
+            int pad = 10 * enlarge, prefixW = prefix ? 28 * enlarge : 0;
+            var bmp = new Bitmap(prefixW + region.W * enlarge + 2 * pad, region.H * enlarge + 2 * pad, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            using (var src = FromImg(region))
+            {
+                g.Clear(Color.FromArgb(30, 30, 30));
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                if (prefix)
+                    using (var f = new Font("Segoe UI", 7f * enlarge, FontStyle.Bold))
+                        g.DrawString("Qty", f, Brushes.White, pad / 2, pad + (region.H * enlarge - 10f * enlarge) / 2);
+                g.DrawImage(src, new Rectangle(prefixW + pad, pad, region.W * enlarge, region.H * enlarge));
+            }
+            return bmp;
+        }
+
+        /// What the last count read looked like, per slot: the picture the reader got, its words, the result, the variant.
+        static readonly object DiagLock = new object();
+        public static List<(string name, Bitmap pic, List<OcrWord> words, int? got, string variant)> LastDiag = new List<(string, Bitmap, List<OcrWord>, int?, string)>();
+
+        /// Saves the last count read for diagnostics: per slot the name, result and variant, the picture the reader
+        /// received, and the same picture with the reader's words boxed.
         public static void SaveLastStrip(string path)
         {
-            if (LastStrip == null) return;
-            int labelW = 260;
-            using (var bmp = new Bitmap(labelW + LastStrip.Width * 2 + 20, Math.Max(LastStrip.Height, 20), PixelFormat.Format32bppArgb))
+            List<(string name, Bitmap pic, List<OcrWord> words, int? got, string variant)> diag;
+            lock (DiagLock) diag = LastDiag.Select(d => (d.name, d.pic == null ? null : (Bitmap)d.pic.Clone(), d.words, d.got, d.variant)).ToList();
+            if (diag.Count == 0) return;
+            int labelW = 300, gap = 8;
+            int picW = diag.Max(d => d.pic?.Width ?? 0), totalH = diag.Sum(d => (d.pic?.Height ?? 20) + gap);
+            using (var bmp = new Bitmap(labelW + picW * 2 + 30, Math.Max(totalH, 20), PixelFormat.Format32bppArgb))
             using (var g = Graphics.FromImage(bmp))
             using (var f = new Font("Segoe UI", 9f, FontStyle.Bold))
             {
                 g.Clear(Color.FromArgb(40, 40, 40));
-                g.DrawImageUnscaled(LastStrip, labelW, 0); g.DrawImageUnscaled(LastStrip, labelW + LastStrip.Width + 10, 0);
-                int bandStep = (LastBandH + DigitGap) * DigitEnlarge;
-                for (int k = 0; k < LastStripNames.Count; k++)
+                int y = 0;
+                foreach (var d in diag)
                 {
-                    string got = k < LastMapped.Length && LastMapped[k].HasValue ? LastMapped[k].Value.ToString() : "?";
-                    g.DrawString($"{LastStripNames[k]}  →  {got}", f, got == "?" ? Brushes.OrangeRed : Brushes.White, 4, k * bandStep + 2);
-                }
-                foreach (var w in LastWords)
-                {
-                    var r = new Rectangle(labelW + LastStrip.Width + 10 + (int)w.X, (int)w.Y, (int)w.W, (int)w.H);
-                    g.DrawRectangle(Pens.Red, r); g.DrawString(w.Text, f, Brushes.Red, r.Right + 2, r.Top);
+                    string got = d.got.HasValue ? d.got.Value.ToString() : "?";
+                    g.DrawString($"{d.name}  →  {got}   [{d.variant}]", f, got == "?" ? Brushes.OrangeRed : Brushes.White, 4, y + 2);
+                    if (d.pic != null)
+                    {
+                        g.DrawImageUnscaled(d.pic, labelW, y); g.DrawImageUnscaled(d.pic, labelW + picW + 10, y);
+                        foreach (var w in d.words)
+                        {
+                            var r = new Rectangle(labelW + picW + 10 + (int)w.X, y + (int)w.Y, (int)w.W, (int)w.H);
+                            g.DrawRectangle(Pens.Red, r); g.DrawString(w.Text, f, Brushes.Red, r.Right + 2, r.Top);
+                        }
+                        d.pic.Dispose();
+                    }
+                    y += (d.pic?.Height ?? 20) + gap;
                 }
                 bmp.Save(path, ImageFormat.Png);
-            }
-        }
-
-        /// Reads the stack counts of several slots with the text reader in one call: each slot's count region (raw
-        /// pixels, found by glyph size and position only) is enlarged and stacked into one strip; each count is the
-        /// trailing run of digits the reader returns for its region. glyphCounts = digit-sized glyphs per region
-        /// (for diagnostics). null entries = not read.
-        public static async Task<int?[]> ReadCountStripsAsync(IList<Img> strips, IList<int> glyphCounts, IList<string> names = null)
-        {
-            var result = new int?[strips.Count];
-            var present = new List<int>(); for (int i = 0; i < strips.Count; i++) if (strips[i] != null) present.Add(i);
-            if (present.Count == 0) return result;
-            int bw = present.Max(i => strips[i].W), bh = present.Max(i => strips[i].H);
-            using (var strip = new Bitmap(bw * DigitEnlarge, present.Count * (bh + DigitGap) * DigitEnlarge, PixelFormat.Format32bppArgb))
-            {
-                using (var g = Graphics.FromImage(strip))
-                {
-                    g.Clear(Color.FromArgb(30, 30, 30));
-                    g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.Half;
-                    for (int k = 0; k < present.Count; k++)
-                        using (var bmp = FromImg(strips[present[k]]))
-                            g.DrawImage(bmp, new Rectangle(0, k * (bh + DigitGap) * DigitEnlarge, bmp.Width * DigitEnlarge, bmp.Height * DigitEnlarge));
-                }
-                LastStrip?.Dispose(); LastStrip = (Bitmap)strip.Clone(); LastBandH = bh;
-                LastStripNames = present.Select(i => names != null && i < names.Count ? names[i] + $" ({glyphCounts[i]} glyphs)" : $"band {i}").ToList();
-                var lines = await ReadWordsAsync(strip, 1);
-                var words = new List<OcrWord>(); foreach (var l in lines) words.AddRange(l);
-                LastWords = words;
-                var mapped = FarmCheck.MapStripWords(words, present.Count, bh, DigitGap, DigitEnlarge);
-                LastMapped = mapped;
-                for (int k = 0; k < present.Count; k++) result[present[k]] = mapped[k];
-                return result;
             }
         }
 
