@@ -598,7 +598,19 @@ namespace CAHelper
                     {
                         var imgNow = PartyOcr.ToImg(copy); var strips = new List<Img>(); var cellCounts = new List<int>();
                         foreach (var sl in slotsNow) { strips.Add(FarmCheck.CountStrip(imgNow, gridNow, sl.Row, sl.Col, Digits, out int n)); cellCounts.Add(n); }
-                        ocr = await PartyOcr.ReadCountStripsAsync(strips, cellCounts);
+                        ocr = await PartyOcr.ReadCountStripsAsync(strips, cellCounts);           // original pixels first
+                        var retry = new List<Img>(); bool anyRetry = false;
+                        for (int i = 0; i < slotsNow.Count; i++)
+                        {
+                            bool failed = strips[i] != null && !ocr[i].HasValue;
+                            retry.Add(failed ? FarmCheck.CountStrip(imgNow, gridNow, slotsNow[i].Row, slotsNow[i].Col, Digits, out _, raw: false) : null);
+                            anyRetry |= failed;
+                        }
+                        if (anyRetry)
+                        {
+                            var ocr2 = await PartyOcr.ReadCountStripsAsync(retry, cellCounts);   // outlined pixels only, for the ones that failed
+                            for (int i = 0; i < ocr.Length; i++) if (!ocr[i].HasValue && ocr2[i].HasValue) ocr[i] = ocr2[i];
+                        }
                     }
                     catch (Exception ex) { Debug("text reader failed on the counts: " + ex.Message, "ocrfail"); }
                     finally { copy.Dispose(); }

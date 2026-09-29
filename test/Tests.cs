@@ -352,9 +352,9 @@ static class T {
       }
       { var gS = FarmCheck.BestRead(inv, FarmCheck.FindGrid(inv, 1912, 248, 612, 612), FarmCheck.DefaultIcons(), digs);
         var hi = gS.slots.First(x => x.Item == "Force Core (High)");
-        var strip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out int nCells);
+        var strip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out int nCells, raw: false); var rawStrip = FarmCheck.CountStrip(inv, gS.grid, hi.Row, hi.Col, digs, out _);
         int darkPx = 0; for (int i = 0; i < strip.Px.Length; i += 4) if (strip.Px[i] == 0) darkPx++;
-        Check(nCells == 3 && strip.W > 25 && strip.W < 40 && darkPx > 60, $"count strip for the reader: 3 cells, {strip.W}x{strip.H}, {darkPx} digit pixels, nothing else"); }
+        Check(nCells == 3 && strip.W > 25 && strip.W < 40 && darkPx > 60 && rawStrip.W == strip.W && rawStrip.H == strip.H, $"count strip for the reader: 3 cells, {strip.W}x{strip.H}, {darkPx} digit pixels (cleaned), raw strip same size"); }
       // hysteresis: the grid used last time is kept unless another position reads clearly better
       { var g0 = FarmCheck.FindGrid(inv, 1912, 248, 612, 612); var first = FarmCheck.BestRead(inv, g0, FarmCheck.DefaultIcons(), digs);
         var nudged = g0; nudged.X += 3; nudged.Y -= 2;                       // a slightly different snap on the next read

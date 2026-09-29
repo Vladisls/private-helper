@@ -696,7 +696,9 @@ namespace CAHelper
 
         /// The count region of a slot for the text reader: only the validated digit cells, as dark digits on white.
         /// Returns null when the band holds no readable count. cellCount = how many digits the reader must return.
-        public static Img CountStrip(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, out int cellCount)
+        /// raw = true: the original pixels of the digit cells (the reader copes with light text on the icon; the
+        /// outline mask would erase digit parts whose outline is lit by the icon). raw = false: outlined pixels only.
+        public static Img CountStrip(Img img, Grid g, int r, int c, IList<(char d, string cell)> templates, out int cellCount, bool raw = true)
         {
             var band = CropImg(img, DigitBand(g, r, c));
             var cells = CountCells(band, g.Scale, templates);
@@ -705,6 +707,7 @@ namespace CAHelper
             var region = cells.Aggregate(Rectangle.Union);
             region.Inflate(2, 2);
             region = Rectangle.Intersect(region, new Rectangle(0, 0, band.W, band.H));
+            if (raw) return CropImg(band, region);
             var px = new byte[region.Width * region.Height * 4];
             for (int y = 0; y < region.Height; y++)
                 for (int x = 0; x < region.Width; x++)

@@ -269,8 +269,8 @@ namespace CAHelper
             {
                 using (var g = Graphics.FromImage(strip))
                 {
-                    g.Clear(Color.White);
-                    g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half;
+                    g.Clear(Color.FromArgb(30, 30, 30));
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.PixelOffsetMode = PixelOffsetMode.Half;
                     for (int k = 0; k < present.Count; k++)
                         using (var bmp = FromImg(strips[present[k]]))
                             g.DrawImage(bmp, new Rectangle(0, k * (bh + DigitGap) * DigitEnlarge, bmp.Width * DigitEnlarge, bmp.Height * DigitEnlarge));
