@@ -274,6 +274,19 @@ static class T {
       Check(FarmCheck.InventoryOpen(inv, gi) && !FarmCheck.InventoryOpen(end, gi) && !FarmCheck.InventoryOpen(tmr, gi), "inventory-open check: yes on the inventory shot, no on the others");
       Check(FarmCheck.EndWindowLikely(Crop(end, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(tmr, 209, 284, 630, 745)) && !FarmCheck.EndWindowLikely(Crop(inv, 209, 284, 630, 745)),
             "end-window trigger: yes on the end window, no in dungeon or with inventory");
+      {
+        // the trigger runs on the area inflated by 15% (clipped to the monitor), with a window-sized sliding check
+        var mon = new System.Drawing.Rectangle(0, 0, end.W, end.H);
+        var endA = new System.Drawing.Rectangle(209, 284, 630, 745);
+        var inf = FarmCheck.InflateArea(endA, 0.15, mon);
+        Img C(Img im, System.Drawing.Rectangle r) => Crop(im, r.X, r.Y, r.Width, r.Height);
+        var offA = FarmCheck.InflateArea(new System.Drawing.Rectangle(209 + 40, 284 - 30, 630, 745), 0.15, mon);   // area a little off the window
+        Console.WriteLine($"INFO end window, inflated capture {inf}: plain check {FarmCheck.EndWindowLikely(C(end, inf))}, window-sized check {FarmCheck.EndWindowLikely(C(end, inf), 630, 745)}");
+        Check(FarmCheck.EndWindowLikely(C(end, inf), 630, 745) && FarmCheck.EndWindowLikely(C(end, offA), 630, 745)
+              && !FarmCheck.EndWindowLikely(C(tmr, inf), 630, 745) && !FarmCheck.EndWindowLikely(C(inv, inf), 630, 745),
+              "end-window trigger on the 15% larger capture: yes on the end window (also 40 px off its area), no in dungeon or with inventory");
+        Check(FarmCheck.EndWindowLikely(C(end, endA), 630, 745) == FarmCheck.EndWindowLikely(C(end, endA)), "window-sized check without a margin = the plain check");
+      }
       var ft = System.IO.Path.Combine(dataDir, "tab1.bin");
       if (System.IO.File.Exists(ft)) {
         var t1 = Load(ft);
@@ -706,6 +719,59 @@ static class T {
     var p2 = new List<string>{ "Obtain Upgrade Core Set (Highest) x 1", "Obtain Faded Orange Jewel x 1", "Obtain Fire Stone x 1", "Obtain Slot Extender (High) x 1" };
     Check(string.Join("|", FarmCheck.NewLines(p1, p2))=="Obtain Fire Stone x 1|Obtain Slot Extender (High) x 1", "loot feed: only lines added since last read");
     Check(FarmCheck.ParseLoot("Obtain Faded Orange Jewel x 2")?.item=="Faded Orange Jewel" && FarmCheck.ParseLoot("Obtain Faded Orange Jewel x 2")?.qty==2, "loot line parsed");
+    {
+      // end window and loot feed follow the UI scale (FarmCheck.ScaleArea)
+      var scr = new System.Drawing.Rectangle(0, 0, 2560, 1440);
+      var endA = new System.Drawing.Rectangle(209, 284, 630, 745); var lootA = new System.Drawing.Rectangle(2105, 1195, 395, 160);
+      var e6 = FarmCheck.ScaleArea(endA, 1.0, 0.6, scr, AreaAnchor.ScreenCentre);
+      double ecx = e6.X + e6.Width / 2.0, ecy = e6.Y + e6.Height / 2.0;
+      Check(e6.Width == 378 && e6.Height == 447 && Math.Abs(ecx - (1280 + (524 - 1280) * 0.6)) <= 1 && Math.Abs(ecy - (720 + (656.5 - 720) * 0.6)) <= 1,
+            $"end window at UI scale 0.6: 378x447, its centre's offset from the screen centre x0.6 ({e6})");
+      var cen = FarmCheck.ScaleArea(new System.Drawing.Rectangle(965, 348, 630, 744), 1.0, 0.6, scr, AreaAnchor.ScreenCentre);
+      Check(Math.Abs(cen.X + cen.Width / 2.0 - 1280) <= 1 && Math.Abs(cen.Y + cen.Height / 2.0 - 720) <= 1 && cen.Width == 378, $"a centred end window stays centred on the screen at 0.6 ({cen})");
+      var l6 = FarmCheck.ScaleArea(lootA, 1.0, 0.6, scr, AreaAnchor.BottomRight);
+      Check(l6.Width == 237 && l6.Height == 96 && 2560 - l6.Right == 36 && 1440 - l6.Bottom == 51,
+            $"loot feed at UI scale 0.6: 237x96, bottom-right 60,85 px from the corner -> 36,51 ({l6})");
+      var mon2 = new System.Drawing.Rectangle(2560, -200, 1920, 1080);
+      var l2 = FarmCheck.ScaleArea(new System.Drawing.Rectangle(4000, 700, 400, 160), 0.8, 0.4, mon2, AreaAnchor.BottomRight);
+      Check(l2.Width == 200 && l2.Height == 80 && mon2.Right - l2.Right == 40 && mon2.Bottom - l2.Bottom == 10, $"bottom-right anchor on a second monitor, from scale 0.8 to 0.4 ({l2})");
+      var eBack = FarmCheck.ScaleArea(e6, 0.6, 1.0, scr, AreaAnchor.ScreenCentre); var lback = FarmCheck.ScaleArea(l6, 0.6, 1.0, scr, AreaAnchor.BottomRight);
+      Check(Math.Abs(eBack.X - endA.X) <= 2 && Math.Abs(eBack.Y - endA.Y) <= 2 && Math.Abs(eBack.Width - endA.Width) <= 2 && Math.Abs(eBack.Height - endA.Height) <= 2
+            && Math.Abs(lback.Right - lootA.Right) <= 2 && Math.Abs(lback.Bottom - lootA.Bottom) <= 2 && Math.Abs(lback.Width - lootA.Width) <= 2,
+            "scaling back to 1.0 gives the areas again (within rounding)");
+      Check(FarmCheck.ScaleArea(endA, 1.0, 1.0, scr, AreaAnchor.ScreenCentre) == endA && FarmCheck.ScaleArea(lootA, 0.6, 0, scr, AreaAnchor.BottomRight) == lootA,
+            "same scale or unknown scale: area unchanged");
+      var mons = new[] { scr, new System.Drawing.Rectangle(2560, 0, 1920, 1080) };
+      Check(FarmCheck.MonitorFor(new System.Drawing.Rectangle(2900, 400, 300, 200), mons, new System.Drawing.Rectangle(0, 0, 4480, 1440)) == mons[1]
+            && FarmCheck.MonitorFor(lootA, mons, System.Drawing.Rectangle.Empty) == scr
+            && FarmCheck.MonitorFor(new System.Drawing.Rectangle(5000, 5000, 10, 10), mons, new System.Drawing.Rectangle(0, 0, 4480, 1440)) == new System.Drawing.Rectangle(0, 0, 4480, 1440),
+            "monitor holding an area: the one with its centre, else all screens");
+      // 15% larger captures, clipped to the monitor
+      var li = FarmCheck.InflateArea(lootA, 0.15, scr);
+      Check(li == new System.Drawing.Rectangle(2075, 1183, 455, 184), $"loot capture 15% larger: 2075,1183 455x184 ({li})");
+      var edge = FarmCheck.InflateArea(new System.Drawing.Rectangle(2400, 1350, 160, 90), 0.15, scr);
+      Check(edge == System.Drawing.Rectangle.FromLTRB(2388, 1343, 2560, 1440), $"inflated at the monitor corner: clipped to it ({edge})");
+      var neg = FarmCheck.InflateArea(new System.Drawing.Rectangle(-1920, 0, 100, 100), 0.15, new System.Drawing.Rectangle(-1920, 0, 1920, 1080));
+      Check(neg == System.Drawing.Rectangle.FromLTRB(-1920, 0, -1812, 108), $"inflated at a left monitor's top-left edge: clipped ({neg})");
+      Check(FarmCheck.InflateArea(new System.Drawing.Rectangle(9000, 9000, 50, 50), 0.15, scr) == new System.Drawing.Rectangle(9000, 9000, 50, 50), "area off the monitor: left as it is (never empty)");
+      // config: end=x,y,w,h@scale, old lines without @scale = scale 1
+      var pa = FarmCheck.ParseArea("209,284,630,745", out double as0);
+      var pr2 = FarmCheck.ParseArea(FarmCheck.FormatArea(new System.Drawing.Rectangle(-50, 10, 378, 447), 0.6), out double as1);
+      var pr3 = FarmCheck.ParseArea("1,2,3,4@abc", out double as2);
+      Check(pa == endA && as0 == 1.0 && FarmCheck.FormatArea(endA, 1.0) == "209,284,630,745@1.0000", "area line without @scale reads as scale 1.0; written as 209,284,630,745@1.0000");
+      Check(pr2 == new System.Drawing.Rectangle(-50, 10, 378, 447) && as1 == 0.6 && pr3 == new System.Drawing.Rectangle(1, 2, 3, 4) && as2 == 1.0
+            && FarmCheck.ParseArea("1,2,3", out _) == null && FarmCheck.ParseArea("a,b,c,d@0.6", out _) == null && FarmCheck.ParseArea(null, out _) == null,
+            "area@0.6 round-trips (negative x ok); bad scale = 1.0; bad rectangles ignored");
+      // OCR of the larger capture: other text and cut lines around the feed / window don't break the parsing
+      var lootRead = new List<string>{ "Obtain Fire St", "[Party] Bob: go", "Obtain Fire Stone x 1.", "Obtain Slot Extender (High) x 1", "HP 12345" };
+      var ll = FarmCheck.LootLines(lootRead);
+      Check(ll.Count == 2 && FarmCheck.ParseLoot(ll[0])?.item == "Fire Stone" && FarmCheck.ParseLoot(ll[0])?.qty == 1
+            && string.Join("|", FarmCheck.NewLines(FarmCheck.LootLines(new List<string>{ "Obtain Fire Sto", "Obtain Fire Stone x 1" }), ll)) == "Obtain Slot Extender (High) x 1",
+            "loot capture with a margin: only complete loot lines kept, the feed diff still finds only the new drop");
+      var endMargin = new List<string>{ "Lv. 180 Somebody", "Channel 3", "Screenshot in", "Dungeon", "Steamer Crazy (Awakened)", "Quest Dungeon Cleared!", "Time :7 min(s) 44 sec(s)", "Dungeon Point Gained: 5", "Dungeon Point Accumulated: 325", "Exit", "12:34" };
+      var rm = FarmCheck.ParseEndWindow(endMargin);
+      Check(rm != null && rm.Dungeon == "Steamer Crazy (Awakened)" && rm.Seconds == 464 && rm.Dp == 5, "end window with other text around it (15% margin) still parsed");
+    }
 
     // ---- Updater ----
     string sha = new string('a', 64);

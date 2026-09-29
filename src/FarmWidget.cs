@@ -66,8 +66,32 @@ namespace CAHelper
         bool locatedSinceMissing;
         string locatedBy = "saved area";                                        // how the inventory area was found: title text / band search / saved area
 
-        // areas (screen pixels). Defaults measured on 2560x1440 screenshots (2026-09-28).
-        Rectangle invArea = new Rectangle(1905, 240, 620, 615), endArea = new Rectangle(209, 284, 630, 745), lootArea = new Rectangle(2105, 1195, 395, 160);
+        // areas (screen pixels). Defaults measured on 2560x1440 screenshots at the full UI size (2026-09-28).
+        static readonly Rectangle DefaultEnd = new Rectangle(209, 284, 630, 745), DefaultLoot = new Rectangle(2105, 1195, 395, 160);
+        Rectangle invArea = new Rectangle(1905, 240, 620, 615);
+        // The end window and the loot feed are kept as set (default or picked) with the UI scale they were set at;
+        // the areas used follow the current UI scale: the end window is a dialog centred on the screen, the loot
+        // feed sits at the screen's bottom-right corner (FarmCheck.ScaleArea on the monitor holding the area).
+        Rectangle endRef = DefaultEnd, lootRef = DefaultLoot;
+        double endRefScale = 1.0, lootRefScale = 1.0;
+        const double AreaMargin = 0.15;                                        // captures are 15% larger: the game may put them a little elsewhere
+        /// The UI scale the areas follow: the known one, else the scale the area was set at (= no change).
+        double ScaleFor(double refScale) => AnchorScale > 0 ? AnchorScale : refScale;
+        static Rectangle Scaled(Rectangle r, double from, double to, AreaAnchor anchor) =>
+            FarmCheck.ScaleArea(r, from, to, PartyOcr.MonitorOf(r), anchor);
+        Rectangle endArea => Scaled(endRef, endRefScale, ScaleFor(endRefScale), AreaAnchor.ScreenCentre);
+        Rectangle lootArea => Scaled(lootRef, lootRefScale, ScaleFor(lootRefScale), AreaAnchor.BottomRight);
+        static Rectangle Capture15(Rectangle r) => FarmCheck.InflateArea(r, AreaMargin, PartyOcr.MonitorOf(r));
+        string Sc2(double v) => v.ToString("0.00", CultureInfo.InvariantCulture);
+        /// Logs where the end-window and loot-feed areas are now (after a UI scale change or a new scale reading).
+        double loggedAreaScale = -1;
+        void LogScaledAreas(string why)
+        {
+            if (Math.Abs(AnchorScale - loggedAreaScale) < 0.005) return;       // only when the scale they follow changed
+            loggedAreaScale = AnchorScale;
+            var e = endArea; var l = lootArea;
+            Debug($"{why}: end window {e.X},{e.Y} {e.Width}x{e.Height} (scale {Sc2(ScaleFor(endRefScale))}, set at {Sc2(endRefScale)}), loot feed {l.X},{l.Y} {l.Width}x{l.Height} (scale {Sc2(ScaleFor(lootRefScale))}, set at {Sc2(lootRefScale)})");
+        }
         List<(string name, double[] f)> icons = FarmCheck.DefaultIcons();
         List<string> rareWords = new List<string> { "Jewel", "Slot Extender", "Potion of Luck", "Stone" };
 
@@ -134,10 +158,10 @@ namespace CAHelper
             {
                 var l = raw.Trim(); int eq = l.IndexOf('='); if (eq < 0 || l.StartsWith("#")) continue;
                 string k = l.Substring(0, eq), v = l.Substring(eq + 1);
-                Rectangle? R() { var p = v.Split(','); return p.Length == 4 && p.All(x => int.TryParse(x, out _)) ? new Rectangle(int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3])) : (Rectangle?)null; }
-                if (k == "inventory" && R() is Rectangle a) invArea = a;
-                else if (k == "end" && R() is Rectangle b) endArea = b;
-                else if (k == "loot" && R() is Rectangle c) lootArea = c;
+                double sc;
+                if (k == "inventory" && FarmCheck.ParseArea(v, out _) is Rectangle a) invArea = a;
+                else if (k == "end" && FarmCheck.ParseArea(v, out sc) is Rectangle b) { endRef = b; endRefScale = sc; }
+                else if (k == "loot" && FarmCheck.ParseArea(v, out sc) is Rectangle c) { lootRef = c; lootRefScale = sc; }
                 else if (k == "rare") rareWords = v.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (k.StartsWith("icon:")) learnedIcons.Add((k.Substring(5), v.Split(' ').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray()));
                 else if (k == "slot") slotSize = FarmCheck.ParseSlotSize(v);
@@ -150,7 +174,7 @@ namespace CAHelper
         void SaveConfig()
         {
             string Rs(Rectangle r) => $"{r.X},{r.Y},{r.Width},{r.Height}";
-            var lines = new List<string> { "# Cabal Helper Farm Tracker settings (written by the helper)", "inventory=" + Rs(invArea), "end=" + Rs(endArea), "loot=" + Rs(lootArea), "rare=" + string.Join(", ", rareWords) };
+            var lines = new List<string> { "# Cabal Helper Farm Tracker settings (written by the helper)", "inventory=" + Rs(invArea), "end=" + FarmCheck.FormatArea(endRef, endRefScale), "loot=" + FarmCheck.FormatArea(lootRef, lootRefScale), "rare=" + string.Join(", ", rareWords) };
             if (!ReferenceEquals(icons, null) && icons.Count > 0 && !icons.SequenceEqual(FarmCheck.DefaultIcons()) && !icons.SequenceEqual(FarmCheck.Icons))
                 foreach (var (n, f) in icons) lines.Add("icon:" + n + "=" + string.Join(" ", f.Select(x => x.ToString("0.00", CultureInfo.InvariantCulture))));
             if (slotSize != null) lines.Add("slot=" + FarmCheck.FormatSlotSize(slotSize.Value));
@@ -163,8 +187,8 @@ namespace CAHelper
         {
             var m = new ContextMenuStrip();
             m.Items.Add("Set inventory area (the core tab's slot grid)…", null, (s, e) => Pick(ref invArea, "Drag a box around the inventory's slot grid (the whole inventory window is fine too). Esc cancels.", resetGrid: true));
-            m.Items.Add("Set end-window area (dungeon cleared window)…", null, (s, e) => Pick(ref endArea, "Drag a box around the dungeon end window (\"Quest Dungeon Cleared!\"). Esc cancels."));
-            m.Items.Add("Set loot-feed area (\"Obtain ... x 1\" lines)…", null, (s, e) => Pick(ref lootArea, "Drag a box around the loot messages (\"Obtain ... x 1\"). Esc cancels."));
+            m.Items.Add("Set end-window area (dungeon cleared window)…", null, (s, e) => PickScaled(ref endRef, ref endRefScale, "Drag a box around the dungeon end window (\"Quest Dungeon Cleared!\"). Esc cancels."));
+            m.Items.Add("Set loot-feed area (\"Obtain ... x 1\" lines)…", null, (s, e) => PickScaled(ref lootRef, ref lootRefScale, "Drag a box around the loot messages (\"Obtain ... x 1\"). Esc cancels."));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Learn core icons from the open inventory", null, (s, e) => LearnIcons());
             m.Items.Add(new ToolStripSeparator());
@@ -186,7 +210,7 @@ namespace CAHelper
         {
             if (MessageBox.Show("Reset the Farm Tracker?\n\nAreas go back to the defaults and the learned core icons and core tab are forgotten. The farm log is kept.",
                                 "Farm Tracker", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            invArea = new Rectangle(1905, 240, 620, 615); endArea = new Rectangle(209, 284, 630, 745); lootArea = new Rectangle(2105, 1195, 395, 160);
+            invArea = new Rectangle(1905, 240, 620, 615); endRef = DefaultEnd; lootRef = DefaultLoot; endRefScale = 1.0; lootRefScale = 1.0;
             icons = FarmCheck.DefaultIcons(); coreTab = null; grid = null; readGrid = null; slotSize = null; foundPitch = null; buttonScale = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty;
             slotIdentity.Clear(); lastKnownCounts.Clear();
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { }
@@ -200,6 +224,17 @@ namespace CAHelper
             if (r == null) return;
             area = r.Value; if (resetGrid) { grid = null; coreTab = null; foundPitch = null; buttonScale = null; locatedBy = "saved area"; ovTitle = Rectangle.Empty; lastKnownCounts.Clear(); }
             Debug($"area set: {r.Value.X},{r.Value.Y} {r.Value.Width}x{r.Value.Height}");
+            SaveConfig(); Render();
+        }
+
+        /// The end-window / loot-feed area: kept with the UI scale it was picked at (the known one; full size when
+        /// not known yet), so it follows later UI scale changes.
+        void PickScaled(ref Rectangle area, ref double refScale, string msg)
+        {
+            var r = AreaPicker.Pick(msg);
+            if (r == null) return;
+            area = r.Value; refScale = AnchorScale > 0 ? AnchorScale : 1.0;
+            Debug($"area set: {r.Value.X},{r.Value.Y} {r.Value.Width}x{r.Value.Height} at UI scale {Sc2(refScale)}{(AnchorScale > 0 ? "" : " (not known yet: full size assumed)")}");
             SaveConfig(); Render();
         }
 
@@ -275,9 +310,10 @@ namespace CAHelper
         void CheckEnd(DateTime now)
         {
             if (busyEnd) return;
-            using (var bmp = PartyOcr.Capture(endArea))
+            var area = endArea;
+            using (var bmp = PartyOcr.Capture(Capture15(area)))
             {
-                bool likely = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp));
+                bool likely = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp), area.Width, area.Height);
                 ovEnd = likely ? (endLatched ? "counted, waiting for it to close" : "seen, reading…") : "not seen"; ovEndColor = likely ? Color.Lime : Color.HotPink;
                 if (!likely) { if (endLatched && endGoneSince == DateTime.MinValue) endGoneSince = now; if (endLatched && (now - endGoneSince).TotalSeconds >= 2) endLatched = false; return; }
                 endGoneSince = DateTime.MinValue;
@@ -469,8 +505,8 @@ namespace CAHelper
                     overlay.Boxes.Add(new DebugOverlay.Box { R = tr, C = ovTabColor, Label = ovTab });
                 }
             }
-            overlay.Boxes.Add(new DebugOverlay.Box { R = endArea, C = ovEndColor, Label = "End window: " + ovEnd });
-            overlay.Boxes.Add(new DebugOverlay.Box { R = lootArea, C = Color.Gold, Label = "Loot feed" + (ovLoot.Length > 0 ? ": " + ovLoot : "") });
+            overlay.Boxes.Add(new DebugOverlay.Box { R = endArea, C = ovEndColor, Label = $"End window (scale {Sc2(ScaleFor(endRefScale))}): " + ovEnd });
+            overlay.Boxes.Add(new DebugOverlay.Box { R = lootArea, C = Color.Gold, Label = $"Loot feed (scale {Sc2(ScaleFor(lootRefScale))})" + (ovLoot.Length > 0 ? ": " + ovLoot : "") });
             overlay.KeepOnTop(); overlay.Invalidate();
         }
 
@@ -525,9 +561,10 @@ namespace CAHelper
                         ovTabColor = td >= 0 && td > FarmCheck.TabMatchMax ? Color.OrangeRed : Color.Orange;
                     }
                 }
+                var endNow = endArea;
                 using (OverlayHidden())
-                using (var bmp = PartyOcr.Capture(endArea))
-                { bool seen = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp)); ovEnd = seen ? "seen" : "not seen"; ovEndColor = seen ? Color.Lime : Color.HotPink; }
+                using (var bmp = PartyOcr.Capture(Capture15(endNow)))
+                { bool seen = FarmCheck.EndWindowLikely(PartyOcr.ToImg(bmp), endNow.Width, endNow.Height); ovEnd = seen ? "seen" : "not seen"; ovEndColor = seen ? Color.Lime : Color.HotPink; }
             }
             catch (Exception ex) { ovInv = "error: " + ex.Message; }
             DrawOverlay();
@@ -626,6 +663,7 @@ namespace CAHelper
                     Debug($"UI scale changed: slot {oldPitch:0.0} px -> {g.PitchX:0.0} px");
                     slotSize = g.PitchX; slotIdentity.Clear();
                 }
+                LogScaledAreas($"areas follow the UI scale {Sc2(AnchorScale)}");
                 grid = null; readGrid = null; lastInvRead = DateTime.MinValue; lastKnownCounts.Clear(); SaveConfig();
                 Debug($"found the inventory by {how}: area set to {invArea.X},{invArea.Y} {invArea.Width}x{invArea.Height}, slot {g.PitchX:0.0} px ({titleInfo})");
                 return true;
@@ -689,6 +727,7 @@ namespace CAHelper
                     // next check reads the inventory there.
                     double oldPitch = KnownPitch > 0 ? KnownPitch : grid.Value.PitchX, newPitch = FarmCheck.RefPitch * ares.Scale;
                     buttonScale = ares.Scale;
+                    LogScaledAreas($"areas follow the UI scale {Sc2(AnchorScale)}");
                     if (Math.Abs(newPitch / oldPitch - 1) > 0.03)
                     {
                         Debug($"UI scale changed: slot {oldPitch:0.0} px -> {newPitch:0.0} px");
@@ -819,7 +858,7 @@ namespace CAHelper
         void CheckLoot()
         {
             if (busyLoot) return;
-            using (var bmp = PartyOcr.Capture(lootArea))
+            using (var bmp = PartyOcr.Capture(Capture15(lootArea)))
             {
                 var img = PartyOcr.ToImg(bmp);
                 long print = 0; for (int i = 0; i < img.Px.Length; i += 64) print = print * 31 + img.Px[i];   // cheap "did it change?" check
@@ -830,7 +869,7 @@ namespace CAHelper
                 {
                     try
                     {
-                        var lines = (await PartyOcr.ReadLinesAsync(copy)).Where(l => l.IndexOf("Obtain", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                        var lines = FarmCheck.LootLines(await PartyOcr.ReadLinesAsync(copy));   // complete "Obtain ... x n" lines only (the margin adds others)
                         var fresh = FarmCheck.NewLines(lastLoot, lines);
                         if (fresh.Count > 0) ovLoot = "new: " + fresh.Last();
                         if (lastLoot != null)

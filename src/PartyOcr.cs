@@ -46,6 +46,21 @@ namespace CAHelper
         public static Rectangle PhysicalVirtualScreen()
         { using (new DpiAware()) return new Rectangle(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79)); }
 
+        [StructLayout(LayoutKind.Sequential)] struct MonRect { public int Left, Top, Right, Bottom; }
+        delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref MonRect rect, IntPtr data);
+        [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
+        /// Every monitor's rectangle in real pixels (same coordinates as PhysicalVirtualScreen). Empty if Windows says nothing.
+        public static List<Rectangle> PhysicalMonitors()
+        {
+            var list = new List<Rectangle>();
+            using (new DpiAware())
+                try { EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr m, IntPtr dc, ref MonRect r, IntPtr d) => { list.Add(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom)); return true; }, IntPtr.Zero); }
+                catch { }
+            return list;
+        }
+        /// The monitor holding an area (the one containing its centre), or all screens when none does.
+        public static Rectangle MonitorOf(Rectangle area) => FarmCheck.MonitorFor(area, PhysicalMonitors(), PhysicalVirtualScreen());
+
         public static Bitmap Capture(Rectangle area)
         {
             if (area.Width <= 0 || area.Height <= 0) throw new ArgumentException($"screen area to capture is empty ({area.Width}x{area.Height} at {area.X},{area.Y})");

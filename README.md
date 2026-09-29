@@ -137,6 +137,9 @@ FARM TRACKER
   Ultimate -> Low, bottom row Force Cores Ultimate -> Low). The inventory is found by itself
   (see below); the end-window and loot-feed areas default to a 2560x1440 game, on another
   resolution set them in "Areas & learning".
+- The end window and loot feed follow the UI scale automatically (the end window scaled around the
+  screen centre, the loot feed at the bottom-right corner; each area remembers the UI scale it was
+  set at); re-pick them only if the game places them elsewhere.
 - Start session, then play as usual:
   * every "Quest Dungeon Cleared!" window counts a run, with its time, dungeon and DP;
   * open the core tab for about a second at the start (a yellow prompt asks for it) and at

@@ -31,6 +31,10 @@ namespace CAHelper
     public enum SlotCountState { Read, Pending, Failed }
     public sealed class SlotShown { public SlotRead Slot; public int? Count; public SlotCountState State; }
 
+    /// Where the game keeps a UI element when its UI scale changes: a dialog centred on the screen, or a panel
+    /// held at the screen's bottom-right corner.
+    public enum AreaAnchor { ScreenCentre, BottomRight }
+
     /// Pixel logic for the Farm Tracker: inventory grid, core icons, stack digits, end-window trigger, loot-feed diff.
     /// Numbers were tuned on real 2560x1440 screenshots; other resolutions scale by the detected slot size.
     public static class FarmCheck
@@ -1761,7 +1765,64 @@ namespace CAHelper
             return g;
         }
 
+        // ---------- screen areas that follow the UI scale ----------
+        /// An area set at UI scale fromScale, where the game puts it at toScale: its size scales by toScale/fromScale,
+        /// and so does its offset from the anchor (ScreenCentre: the rectangle's centre from the screen's centre;
+        /// BottomRight: the rectangle's bottom-right corner from the screen's bottom-right corner). A scale that is
+        /// unknown (0 or less) or unchanged gives the area back as it is.
+        public static Rectangle ScaleArea(Rectangle area, double fromScale, double toScale, Rectangle screen, AreaAnchor anchor)
+        {
+            if (fromScale <= 0 || toScale <= 0 || Math.Abs(toScale / fromScale - 1) < 1e-6) return area;
+            double f = toScale / fromScale, w = area.Width * f, h = area.Height * f, left, top;
+            if (anchor == AreaAnchor.ScreenCentre)
+            {
+                double cx = screen.X + screen.Width / 2.0, cy = screen.Y + screen.Height / 2.0;
+                left = cx + (area.X + area.Width / 2.0 - cx) * f - w / 2; top = cy + (area.Y + area.Height / 2.0 - cy) * f - h / 2;
+            }
+            else
+            {
+                left = screen.Right - (screen.Right - area.Right) * f - w; top = screen.Bottom - (screen.Bottom - area.Bottom) * f - h;
+            }
+            int x0 = (int)Math.Round(left), y0 = (int)Math.Round(top);
+            return new Rectangle(x0, y0, Math.Max(1, (int)Math.Round(left + w) - x0), Math.Max(1, (int)Math.Round(top + h) - y0));
+        }
+
+        /// The monitor whose rectangle contains the area's centre; fallback (all screens) when none does.
+        public static Rectangle MonitorFor(Rectangle area, IEnumerable<Rectangle> monitors, Rectangle fallback)
+        {
+            var c = new Point(area.X + area.Width / 2, area.Y + area.Height / 2);
+            foreach (var m in monitors ?? Enumerable.Empty<Rectangle>()) if (m.Contains(c)) return m;
+            return fallback;
+        }
+
+        /// The area grown by fraction of its size (half on each side, so 0.15 = 15% wider and taller), clipped to
+        /// the monitor. The area itself when the clipped result would be empty.
+        public static Rectangle InflateArea(Rectangle area, double fraction, Rectangle clip)
+        {
+            int dx = (int)Math.Round(area.Width * fraction / 2), dy = (int)Math.Round(area.Height * fraction / 2);
+            var r = Rectangle.Intersect(Rectangle.FromLTRB(area.Left - dx, area.Top - dy, area.Right + dx, area.Bottom + dy), clip);
+            return r.Width > 0 && r.Height > 0 ? r : area;
+        }
+
+        /// A saved area line value: "x,y,w,h@scale" (the UI scale it was set at); an old "x,y,w,h" line is scale 1.
+        /// null when not four whole numbers (a bad scale reads as 1).
+        public static Rectangle? ParseArea(string v, out double scale)
+        {
+            scale = 1.0;
+            var parts = (v ?? "").Trim().Split('@');
+            if (parts.Length > 2) return null;
+            var p = parts[0].Split(',').Select(x => x.Trim()).ToArray();
+            if (p.Length != 4 || !p.All(x => int.TryParse(x, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))) return null;
+            if (parts.Length == 2) scale = ParseUiScale(parts[1]) ?? 1.0;
+            return new Rectangle(int.Parse(p[0], CultureInfo.InvariantCulture), int.Parse(p[1], CultureInfo.InvariantCulture), int.Parse(p[2], CultureInfo.InvariantCulture), int.Parse(p[3], CultureInfo.InvariantCulture));
+        }
+        public static string FormatArea(Rectangle r, double scale) => $"{r.X},{r.Y},{r.Width},{r.Height}@{FormatUiScale(scale)}";
+
         // ---------- dungeon end window ----------
+        static bool EndYellow(int r, int g, int b) => r > 180 && g > 110 && b < 90 && r > g;
+        static bool EndDark(int r, int g, int b) => Math.Max(r, Math.Max(g, b)) < 45;
+        static bool EndRatios(int yellow, int dark, int tot) => tot > 0 && yellow * 1000 >= tot * 3 && dark * 100 >= tot * 55;
+
         /// Cheap check before reading text: the end window is a dark panel with yellow text lines.
         public static bool EndWindowLikely(Img img)
         {
@@ -1770,10 +1831,38 @@ namespace CAHelper
                 for (int x = 0; x < img.W; x += 2)
                 {
                     img.Rgb(x, y, out int r, out int g, out int b); tot++;
-                    if (r > 180 && g > 110 && b < 90 && r > g) yellow++;
-                    if (Math.Max(r, Math.Max(g, b)) < 45) dark++;
+                    if (EndYellow(r, g, b)) yellow++;
+                    if (EndDark(r, g, b)) dark++;
                 }
-            return tot > 0 && yellow * 1000 >= tot * 3 && dark * 100 >= tot * 55;
+            return EndRatios(yellow, dark, tot);
+        }
+
+        /// The same check on a capture with a margin around the expected window (winW x winH): true when a
+        /// window-sized part of it, anywhere in the capture (7x7 positions), looks like the end window. So the extra
+        /// margin (game world around the window) doesn't dilute the check, and a window a little off its place is found.
+        public static bool EndWindowLikely(Img img, int winW, int winH)
+        {
+            if (winW <= 0 || winH <= 0 || (winW >= img.W && winH >= img.H)) return EndWindowLikely(img);
+            int sw = (img.W + 1) / 2, sh = (img.H + 1) / 2;                   // samples every 2nd pixel, like above
+            int ww = Math.Min(sw, (Math.Min(winW, img.W) + 1) / 2), wh = Math.Min(sh, (Math.Min(winH, img.H) + 1) / 2);
+            var ys = new int[(sw + 1) * (sh + 1)]; var ds = new int[(sw + 1) * (sh + 1)];
+            for (int sy = 0; sy < sh; sy++)
+                for (int sx = 0; sx < sw; sx++)
+                {
+                    img.Rgb(sx * 2, sy * 2, out int r, out int g, out int b);
+                    int i = (sy + 1) * (sw + 1) + sx + 1, up = sy * (sw + 1) + sx + 1;
+                    ys[i] = (EndYellow(r, g, b) ? 1 : 0) + ys[i - 1] + ys[up] - ys[up - 1];
+                    ds[i] = (EndDark(r, g, b) ? 1 : 0) + ds[i - 1] + ds[up] - ds[up - 1];
+                }
+            int Sum(int[] a, int x0, int y0) => a[(y0 + wh) * (sw + 1) + x0 + ww] - a[y0 * (sw + 1) + x0 + ww] - a[(y0 + wh) * (sw + 1) + x0] + a[y0 * (sw + 1) + x0];
+            const int Steps = 6;
+            for (int j = 0; j <= Steps; j++)
+                for (int i = 0; i <= Steps; i++)
+                {
+                    int x0 = (sw - ww) * i / Steps, y0 = (sh - wh) * j / Steps;
+                    if (EndRatios(Sum(ys, x0, y0), Sum(ds, x0, y0), ww * wh)) return true;
+                }
+            return false;
         }
 
         public sealed class RunResult { public string Dungeon; public int Seconds; public int Dp; }
@@ -1820,7 +1909,13 @@ namespace CAHelper
         static bool Same(string a, string b) => Norm(a) == Norm(b);
         static string Norm(string s) => new string((s ?? "").Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
 
-        static readonly Regex LootRx = new Regex(@"Obtain\s+(.+?)\s*x\s*(\d+)\s*$", RegexOptions.IgnoreCase);
+        /// The complete loot lines of a read ("Obtain <item> x <n>"): lines around the feed (the capture has a margin)
+        /// and a half-visible line at the edge are dropped, so they can't break NewLines' overlap.
+        public static List<string> LootLines(IEnumerable<string> lines) =>
+            (lines ?? Enumerable.Empty<string>()).Where(l => ParseLoot(l) != null).ToList();
+
+        // (trailing punctuation the reader picks up at the edge of the capture is ignored)
+        static readonly Regex LootRx = new Regex(@"Obtain\s+(.+?)\s*x\s*(\d+)[\W_]*$", RegexOptions.IgnoreCase);
         public static (string item, int qty)? ParseLoot(string line)
         {
             var m = LootRx.Match((line ?? "").Trim());
